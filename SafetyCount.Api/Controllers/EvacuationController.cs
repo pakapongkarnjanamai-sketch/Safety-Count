@@ -37,19 +37,24 @@ public class EvacuationController(ApplicationDbContext dbContext) : ControllerBa
             .Select(group => group.OrderByDescending(x => x.CheckInTime).First())
             .ToListAsync(cancellationToken);
 
-        var latestStatusLookup = latestCheckIns.ToDictionary(x => x.EmployeeId, x => x.Status);
+        var safeEmployeeIds = latestCheckIns
+            .Where(x => x.Status.Equals("Safe", StringComparison.OrdinalIgnoreCase))
+            .Select(x => x.EmployeeId)
+            .ToHashSet();
 
-        var report = await dbContext.Departments
+        var departments = await dbContext.Departments
+            .Include(x => x.Employees)
+            .ToListAsync(cancellationToken);
+
+        var report = departments
             .Select(department => new
             {
                 DepartmentId = department.Id,
                 DepartmentName = department.Name,
                 TotalEmployees = department.Employees.Count,
-                SafeCount = department.Employees.Count(employee =>
-                    latestStatusLookup.ContainsKey(employee.Id) &&
-                    latestStatusLookup[employee.Id].Equals("Safe", StringComparison.OrdinalIgnoreCase))
+                SafeCount = department.Employees.Count(employee => safeEmployeeIds.Contains(employee.Id))
             })
-            .ToListAsync(cancellationToken);
+            .ToList();
 
         return Ok(report);
     }

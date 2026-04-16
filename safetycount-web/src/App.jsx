@@ -1,15 +1,22 @@
-import MorningCheckIn from './components/MorningCheckIn'
+import { BrowserRouter, Routes, Route } from 'react-router-dom'
+import AppLayout from './components/layout/AppLayout'
+import DashboardPage from './pages/DashboardPage'
+import EmployeesPage from './pages/EmployeesPage'
+import AttendancePage from './pages/AttendancePage'
+import HistoryPage from './pages/HistoryPage'
 
 function App() {
   return (
-    <main className="mx-auto min-h-screen max-w-5xl space-y-6 p-4 md:p-8">
-      <header>
-        <h1 className="text-3xl font-bold text-slate-900 md:text-4xl">SafetyCount</h1>
-        <p className="mt-2 text-slate-600">Daily attendance and emergency safety confirmation dashboard.</p>
-      </header>
-
-      <MorningCheckIn />
-    </main>
+    <BrowserRouter>
+      <Routes>
+        <Route element={<AppLayout />}>
+          <Route path="/" element={<DashboardPage />} />
+          <Route path="/employees" element={<EmployeesPage />} />
+          <Route path="/attendance" element={<AttendancePage />} />
+          <Route path="/history" element={<HistoryPage />} />
+        </Route>
+      </Routes>
+    </BrowserRouter>
   )
 }
 

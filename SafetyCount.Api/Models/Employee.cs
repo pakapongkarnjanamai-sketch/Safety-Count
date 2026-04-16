@@ -17,6 +17,4 @@ public class Employee
     public Department? Department { get; set; }
 
     public ICollection<CheckIn> CheckIns { get; set; } = new List<CheckIn>();
-
-    public ICollection<DailyAttendance> DailyAttendances { get; set; } = new List<DailyAttendance>();
 }

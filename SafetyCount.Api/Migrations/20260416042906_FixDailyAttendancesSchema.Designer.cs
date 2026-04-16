@@ -3,6 +3,7 @@ using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Metadata;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using SafetyCount.Api.Data;
 
@@ -11,9 +12,11 @@ using SafetyCount.Api.Data;
 namespace SafetyCount.Api.Migrations
 {
     [DbContext(typeof(ApplicationDbContext))]
-    partial class ApplicationDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260416042906_FixDailyAttendancesSchema")]
+    partial class FixDailyAttendancesSchema
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -45,7 +48,7 @@ namespace SafetyCount.Api.Migrations
 
                     b.HasIndex("EmployeeId");
 
-                    b.ToTable("CheckIns", (string)null);
+                    b.ToTable("CheckIns");
                 });
 
             modelBuilder.Entity("SafetyCount.Api.Models.DailyAttendance", b =>
@@ -80,7 +83,7 @@ namespace SafetyCount.Api.Migrations
                     b.HasIndex("EmployeeId", "Date")
                         .IsUnique();
 
-                    b.ToTable("DailyAttendances", (string)null);
+                    b.ToTable("DailyAttendances");
                 });
 
             modelBuilder.Entity("SafetyCount.Api.Models.Department", b =>
@@ -98,7 +101,7 @@ namespace SafetyCount.Api.Migrations
 
                     b.HasKey("Id");
 
-                    b.ToTable("Departments", (string)null);
+                    b.ToTable("Departments");
                 });
 
             modelBuilder.Entity("SafetyCount.Api.Models.Employee", b =>
@@ -121,7 +124,7 @@ namespace SafetyCount.Api.Migrations
 
                     b.HasIndex("DepartmentId");
 
-                    b.ToTable("Employees", (string)null);
+                    b.ToTable("Employees");
                 });
 
             modelBuilder.Entity("SafetyCount.Api.Models.CheckIn", b =>
@@ -134,6 +137,8 @@ namespace SafetyCount.Api.Migrations
 
                     b.Navigation("Employee");
                 });
+
+
 
             modelBuilder.Entity("SafetyCount.Api.Models.Employee", b =>
                 {

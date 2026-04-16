@@ -6,7 +6,7 @@ public class DailyAttendance
 {
     public int Id { get; set; }
 
-    public int EmployeeId { get; set; }
+    public string EmployeeId { get; set; } = string.Empty;
 
     public DateTime Date { get; set; }
 

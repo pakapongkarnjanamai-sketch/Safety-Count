@@ -19,7 +19,7 @@ public class BadgeFileReaderServiceTests
         var result = await service.ParseBadgeSwipeFileAsync(file);
 
         Assert.Single(result);
-        Assert.Equal(4804120, result[0].EmployeeId);
+        Assert.Equal("480412", result[0].EmployeeId);
         Assert.Equal(DateTime.Today.AddHours(5).AddMinutes(46), result[0].SwipeTime);
     }
 }

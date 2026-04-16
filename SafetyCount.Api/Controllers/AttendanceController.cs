@@ -1,10 +1,12 @@
+using System.Globalization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Options;
 using SafetyCount.Api.Data;
 using SafetyCount.Api.DTOs;
 using SafetyCount.Api.Models;
+using SafetyCount.Api.Options;
 using SafetyCount.Api.Services;
-using System.Text.Json;
 
 namespace SafetyCount.Api.Controllers;
 
@@ -13,11 +15,9 @@ namespace SafetyCount.Api.Controllers;
 public class AttendanceController(
     ApplicationDbContext dbContext,
     IBadgeFileReaderService badgeFileReaderService,
-    IHttpClientFactory httpClientFactory) : ControllerBase
+    IBadgeAttendanceService badgeAttendanceService,
+    IOptions<BadgeFileSettings> badgeFileSettings) : ControllerBase
 {
-    private const string EmployeeServicePath =
-        "ITM/Employee.Service/api/Employee/GetAllThai";
-
     /// <summary>
     /// Get attendance for a specific date. If no records exist for that date,
     /// auto-generates records for all employees with IsPresent = true.
@@ -38,9 +38,14 @@ public class AttendanceController(
 
             foreach (var emp in employees)
             {
+                if (string.IsNullOrWhiteSpace(emp.EId))
+                {
+                    continue;
+                }
+
                 var attendance = new DailyAttendance
                 {
-                    EmployeeId = emp.Id,
+                    EmployeeId = emp.EId,
                     Date = targetDate,
                     IsPresent = true,
                     Remark = null,
@@ -75,10 +80,10 @@ public class AttendanceController(
     /// <summary>
     /// Update attendance for a single employee on a specific date.
     /// </summary>
-    [HttpPut("{date:datetime}/{employeeId:int}")]
+    [HttpPut("{date:datetime}/{employeeId}")]
     public async Task<IActionResult> UpdateAttendance(
         DateTime date,
-        int employeeId,
+        string employeeId,
         [FromBody] MorningAttendanceSubmitDto dto,
         CancellationToken cancellationToken)
     {
@@ -186,110 +191,53 @@ public class AttendanceController(
         }
 
         var badgeSwipes = await badgeFileReaderService.ParseBadgeSwipeFileAsync(file, cancellationToken);
-        var today = DateTime.Today;
+        var updatedCount = await badgeAttendanceService.CrossCheckTodayAsync(badgeSwipes, cancellationToken);
 
-        var todayAttendances = await dbContext.DailyAttendances
-            .Where(x => x.Date == today)
-            .ToDictionaryAsync(x => x.EmployeeId, cancellationToken);
-
-        foreach (var swipe in badgeSwipes
-                     .GroupBy(x => x.EmployeeId)
-                     .Select(group => group.OrderBy(x => x.SwipeTime).First()))
-        {
-            if (!todayAttendances.TryGetValue(swipe.EmployeeId, out var attendance))
-            {
-                continue;
-            }
-
-            attendance.BadgeSwipeTime = swipe.SwipeTime;
-            attendance.IsBadgeCrossChecked = true;
-        }
-
-        await dbContext.SaveChangesAsync(cancellationToken);
-        return Ok();
+        return Ok(new { swipeCount = badgeSwipes.Count, updatedCount });
     }
 
-    private async Task<Dictionary<int, string>> ResolveEmployeeNamesAsync(
-        List<int> employeeIds,
+    [HttpPost("internal/crosscheck-badges/share")]
+    [ApiExplorerSettings(IgnoreApi = true)]
+    public async Task<IActionResult> CrossCheckBadgesFromShare([FromQuery] string? fileName, CancellationToken cancellationToken)
+    {
+        var shareDirectory = badgeFileSettings.Value.ShareDirectory;
+        if (string.IsNullOrWhiteSpace(shareDirectory))
+        {
+            return StatusCode(500, "BadgeFileSettings:ShareDirectory is not configured.");
+        }
+
+        var resolvedFileName = string.IsNullOrWhiteSpace(fileName)
+            ? $"{DateTime.Today.ToString("ddMMMyy", CultureInfo.InvariantCulture).ToUpperInvariant()}.TAF"
+            : Path.GetFileName(fileName.Trim());
+
+        var filePath = Path.Combine(shareDirectory, resolvedFileName);
+        if (!System.IO.File.Exists(filePath))
+        {
+            return NotFound($"Badge file was not found: {filePath}");
+        }
+
+        var badgeSwipes = await badgeFileReaderService.ParseBadgeSwipePathAsync(filePath, cancellationToken);
+        var updatedCount = await badgeAttendanceService.CrossCheckTodayAsync(badgeSwipes, cancellationToken);
+
+        return Ok(new
+        {
+            fileName = resolvedFileName,
+            filePath,
+            swipeCount = badgeSwipes.Count,
+            updatedCount
+        });
+    }
+
+    private async Task<Dictionary<string, string>> ResolveEmployeeNamesAsync(
+        List<string> employeeIds,
         CancellationToken cancellationToken)
     {
-        var names = await dbContext.Employees
-            .Where(e => employeeIds.Contains(e.Id))
-            .ToDictionaryAsync(e => e.Id, e => e.Name, cancellationToken);
+        var employees = await dbContext.Employees
+            .AsNoTracking()
+            .Where(e => e.EId != null && employeeIds.Contains(e.EId))
+            .Select(e => new { e.EId, e.Name })
+            .ToListAsync(cancellationToken);
 
-        var unresolvedIds = employeeIds
-            .Where(id => !names.ContainsKey(id))
-            .ToList();
-
-        if (unresolvedIds.Count == 0)
-        {
-            return names;
-        }
-
-        var externalNames = await LoadExternalEmployeeNamesAsync(cancellationToken);
-        foreach (var employeeId in unresolvedIds)
-        {
-            if (externalNames.TryGetValue(employeeId.ToString(), out var name))
-            {
-                names[employeeId] = name;
-            }
-        }
-
-        return names;
-    }
-
-    private async Task<Dictionary<string, string>> LoadExternalEmployeeNamesAsync(CancellationToken cancellationToken)
-    {
-        var client = httpClientFactory.CreateClient("EmployeeService");
-        var sort = """[{"selector":"EId","desc":false}]""";
-        var filter = """["Department","=","SA"]""";
-        var query = $"skip=0&take=500&sort={Uri.EscapeDataString(sort)}&filter={Uri.EscapeDataString(filter)}";
-
-        try
-        {
-            using var response = await client.GetAsync($"{EmployeeServicePath}?{query}", cancellationToken);
-            if (!response.IsSuccessStatusCode)
-            {
-                return new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-            }
-
-            await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
-            var payload = await JsonSerializer.DeserializeAsync<ExternalEmployeeResponse>(
-                stream,
-                new JsonSerializerOptions { PropertyNameCaseInsensitive = true },
-                cancellationToken);
-
-            return payload?.Data?
-                .Where(x => !string.IsNullOrWhiteSpace(x.EId))
-                .Select(x => new
-                {
-                    x.EId,
-                    Name = $"{x.ThaiPrefix ?? string.Empty}{x.ThaiFirstName ?? string.Empty} {x.ThaiLastName ?? string.Empty}".Trim()
-                })
-                .Where(x => !string.IsNullOrWhiteSpace(x.Name))
-                .GroupBy(x => x.EId!, StringComparer.OrdinalIgnoreCase)
-                .ToDictionary(x => x.Key, x => x.First().Name, StringComparer.OrdinalIgnoreCase)
-                ?? new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-        }
-        catch
-        {
-            return new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-        }
-    }
-
-    private sealed class ExternalEmployeeResponse
-    {
-        public List<ExternalEmployee>? Data { get; set; }
-    }
-
-    private sealed class ExternalEmployee
-    {
-        public string? EId { get; set; }
-
-        public string? ThaiPrefix { get; set; }
-
-        public string? ThaiFirstName { get; set; }
-
-        public string? ThaiLastName { get; set; }
+        return employees.ToDictionary(e => e.EId!, e => e.Name);
     }
 }

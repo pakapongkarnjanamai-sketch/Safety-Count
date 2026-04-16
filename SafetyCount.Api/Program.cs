@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using SafetyCount.Api.Data;
+using SafetyCount.Api.Options;
 using SafetyCount.Api.Services;
 using Scalar.AspNetCore;
 
@@ -7,6 +8,8 @@ var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddControllers();
 builder.Services.AddOpenApi();
+builder.Services.Configure<BadgeFileSettings>(builder.Configuration.GetSection(BadgeFileSettings.SectionName));
+builder.Services.Configure<EmailSettings>(builder.Configuration.GetSection(EmailSettings.SectionName));
 
 builder.Services.AddDbContext<ApplicationDbContext>(options =>
     options.UseSqlServer(
@@ -14,6 +17,8 @@ builder.Services.AddDbContext<ApplicationDbContext>(options =>
         ?? "Server=(localdb)\\mssqllocaldb;Database=SafetyCountDb;Trusted_Connection=True;TrustServerCertificate=True"));
 
 builder.Services.AddScoped<IBadgeFileReaderService, BadgeFileReaderService>();
+builder.Services.AddScoped<IBadgeAttendanceService, BadgeAttendanceService>();
+builder.Services.AddScoped<IEmailSenderService, EmailSenderService>();
 builder.Services.AddHttpClient("EmployeeService", client =>
 {
     client.BaseAddress = new Uri("https://ap-ntc2138-qawb/");

@@ -2,7 +2,7 @@ namespace SafetyCount.Api.DTOs;
 
 public class MorningAttendanceSubmitDto
 {
-    public int EmployeeId { get; set; }
+    public string EmployeeId { get; set; } = string.Empty;
 
     public bool IsPresent { get; set; }
 

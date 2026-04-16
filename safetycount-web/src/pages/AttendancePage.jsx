@@ -8,6 +8,7 @@ function formatDateParam(d) {
 
 function AttendancePage() {
   const today = formatDateParam(new Date())
+  const [selectedDate, setSelectedDate] = useState(today)
 
   const [rows, setRows] = useState([])
   const [filteredRows, setFilteredRows] = useState([])
@@ -16,14 +17,17 @@ function AttendancePage() {
   const [saveStatus, setSaveStatus] = useState('idle') // idle | saving | saved | error
   const [errorMessage, setErrorMessage] = useState('')
 
+  const [history, setHistory] = useState([])
+  const [isLoadingHistory, setIsLoadingHistory] = useState(true)
+
   const savedTimer = useRef(null)
   const debounceTimers = useRef({})
 
-  const loadAttendance = async () => {
+  const loadAttendance = useCallback(async (date) => {
     try {
       setIsLoading(true)
       setErrorMessage('')
-      const res = await fetch(`/api/attendance/${today}`)
+      const res = await fetch(`/api/attendance/${date}`)
       if (!res.ok) throw new Error('Unable to load attendance.')
       const data = await res.json()
       setRows(data)
@@ -33,10 +37,35 @@ function AttendancePage() {
     } finally {
       setIsLoading(false)
     }
-  }
+  }, [])
 
   useEffect(() => {
-    loadAttendance()
+    const loadHistory = async () => {
+      try {
+        setIsLoadingHistory(true)
+        const to = formatDateParam(new Date())
+        const from = formatDateParam(new Date(Date.now() - 30 * 24 * 60 * 60 * 1000))
+        const res = await fetch(`/api/attendance/history?from=${from}&to=${to}`)
+        if (!res.ok) throw new Error('Unable to load history.')
+        const data = await res.json()
+        setHistory(data)
+      } catch {
+        // Ignore history load errors.
+      } finally {
+        setIsLoadingHistory(false)
+      }
+    }
+
+    loadHistory()
+  }, [])
+
+  useEffect(() => {
+    if (selectedDate) {
+      loadAttendance(selectedDate)
+    }
+  }, [selectedDate, loadAttendance])
+
+  useEffect(() => {
     return () => {
       Object.values(debounceTimers.current).forEach(clearTimeout)
       clearTimeout(savedTimer.current)
@@ -62,7 +91,7 @@ function AttendancePage() {
   const updateSingle = useCallback(async (employeeId, isPresent, remark) => {
     try {
       setSaveStatus('saving')
-      const res = await fetch(`/api/attendance/${today}/${employeeId}`, {
+      const res = await fetch(`/api/attendance/${selectedDate}/${employeeId}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ employeeId, isPresent, remark }),
@@ -75,7 +104,7 @@ function AttendancePage() {
     } catch {
       setSaveStatus('error')
     }
-  }, [today])
+  }, [selectedDate])
 
   const onTogglePresent = (employeeId) => {
     setRows((prev) => {
@@ -151,11 +180,15 @@ function AttendancePage() {
       {/* Date + Summary + Save status */}
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex flex-wrap items-center gap-3">
-          <div className="flex items-center gap-2 rounded-lg bg-indigo-50 px-3 py-2 text-sm font-semibold text-indigo-700 ring-1 ring-indigo-200/60">
-            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="h-4 w-4">
-              <path fillRule="evenodd" d="M5.75 2a.75.75 0 0 1 .75.75V4h7V2.75a.75.75 0 0 1 1.5 0V4h.25A2.75 2.75 0 0 1 18 6.75v8.5A2.75 2.75 0 0 1 15.25 18H4.75A2.75 2.75 0 0 1 2 15.25v-8.5A2.75 2.75 0 0 1 4.75 4H5V2.75A.75.75 0 0 1 5.75 2Z" clipRule="evenodd" />
-            </svg>
-            Today: {today}
+          <div className="flex items-center gap-2">
+            <label htmlFor="attendance-date" className="text-sm font-medium text-slate-600">Date:</label>
+            <input
+              id="attendance-date"
+              type="date"
+              value={selectedDate}
+              onChange={(e) => setSelectedDate(e.target.value)}
+              className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700 shadow-sm transition-colors duration-150 focus:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
+            />
           </div>
           <div className="flex items-center gap-2 rounded-lg bg-white px-3 py-2 text-sm shadow-sm ring-1 ring-slate-200/60">
             <span className="inline-block h-2 w-2 rounded-full bg-emerald-500" />
@@ -198,6 +231,37 @@ function AttendancePage() {
           )}
         </div>
       </div>
+
+      {/* Recent history summary */}
+      {!isLoadingHistory && history.length > 0 && (
+        <div>
+          <h3 className="mb-2 text-xs font-semibold uppercase tracking-wider text-slate-500">Recent Days</h3>
+          <div className="flex flex-wrap gap-2">
+            {history.map((day) => {
+              const d = day.date.split('T')[0]
+              const isSelected = d === selectedDate
+              const percent = day.total > 0 ? Math.round((day.presentCount / day.total) * 100) : 0
+              return (
+                <button
+                  key={d}
+                  type="button"
+                  onClick={() => setSelectedDate(d)}
+                  className={`rounded-lg px-3 py-2 text-xs font-medium transition-all duration-150 ${
+                    isSelected
+                      ? 'bg-indigo-600 text-white shadow-sm'
+                      : 'bg-white text-slate-600 shadow-sm ring-1 ring-slate-200/60 hover:bg-slate-50'
+                  }`}
+                >
+                  <div>{d}</div>
+                  <div className={`mt-0.5 ${isSelected ? 'text-indigo-200' : percent === 100 ? 'text-emerald-500' : 'text-slate-400'}`}>
+                    {percent}% present
+                  </div>
+                </button>
+              )
+            })}
+          </div>
+        </div>
+      )}
 
       {/* Search */}
       <div className="relative">

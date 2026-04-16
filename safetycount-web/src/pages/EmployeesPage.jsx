@@ -1,34 +1,17 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
+import { createPortal } from 'react-dom'
 import DataTable from '../components/ui/DataTable'
 
-function buildEmployeeName(employee) {
-  const thaiName = `${employee.ThaiPrefix ?? ''}${employee.ThaiFirstName ?? ''} ${employee.ThaiLastName ?? ''}`.trim()
-  if (thaiName) {
-    return thaiName
-  }
-
-  const englishName = `${employee.EnglishPrefix ?? ''}${employee.EnglishFirstName ?? ''} ${employee.EnglishLastName ?? ''}`.trim()
-  if (englishName) {
-    return englishName
-  }
-
-  return employee.name ?? 'Unknown'
-}
+const DEFAULT_EXTERNAL_PAGE_SIZE = 50
 
 function normalizeEmployee(employee) {
   if (!employee || typeof employee !== 'object') {
     return null
   }
-
-  if ('name' in employee && 'id' in employee) {
-    return employee
-  }
-
   return {
-    id: employee.EId ?? employee.Id ?? '',
-    sourceId: employee.Id ?? null,
-    name: buildEmployeeName(employee),
-    department: employee.Department ?? '',
+    ...employee,
+    sourceId: employee.sourceId ?? employee.id,
+    requiresBadgeSwipe: employee.requiresBadgeSwipe ?? true,
   }
 }
 
@@ -45,7 +28,11 @@ function EmployeesPage() {
   const [externalList, setExternalList] = useState([])
   const [isLoadingExternal, setIsLoadingExternal] = useState(false)
   const [externalSearch, setExternalSearch] = useState('')
-  const [filteredExternal, setFilteredExternal] = useState([])
+  const [externalDepartment, setExternalDepartment] = useState('')
+  const [externalPage, setExternalPage] = useState(1)
+  const [externalPageSize, setExternalPageSize] = useState(DEFAULT_EXTERNAL_PAGE_SIZE)
+  const [externalTotalCount, setExternalTotalCount] = useState(-1)
+  const [externalHasMore, setExternalHasMore] = useState(false)
   const [addingIds, setAddingIds] = useState(new Set())
 
   const showStatus = (message, type) => {
@@ -84,56 +71,69 @@ function EmployeesPage() {
       employees.filter(
         (emp) =>
           String(emp.id).includes(q) ||
+          String(emp.eId ?? '').toLowerCase().includes(q) ||
           (emp.name ?? '').toLowerCase().includes(q),
       ),
     )
   }, [searchQuery, employees])
 
-  // Filter external employees
-  useEffect(() => {
-    if (!externalSearch.trim()) {
-      setFilteredExternal(externalList)
-      return
+  const filteredExternal = useMemo(() => {
+    const q = externalSearch.trim().toLowerCase()
+    if (!q) {
+      return externalList
     }
-    const q = externalSearch.toLowerCase()
-    setFilteredExternal(
-      externalList.filter(
-        (emp) =>
-          (emp.eId ?? '').toLowerCase().includes(q) ||
-          emp.name.toLowerCase().includes(q),
-      ),
+
+    return externalList.filter(
+      (emp) =>
+        (emp.eId ?? '').toLowerCase().includes(q) ||
+        (emp.name ?? '').toLowerCase().includes(q),
     )
   }, [externalSearch, externalList])
 
-  const loadExternalEmployees = async () => {
+  const loadExternalEmployees = useCallback(async (page = 1, take = externalPageSize, department = externalDepartment) => {
     try {
       setIsLoadingExternal(true)
-      const res = await fetch('/api/employees/external')
+      const params = new URLSearchParams({
+        skip: String((page - 1) * take),
+        take: String(take),
+      })
+
+      if (department.trim()) {
+        params.set('department', department.trim())
+      }
+
+      const res = await fetch(`/api/employees/external?${params.toString()}`)
       if (!res.ok) throw new Error('Unable to load external employees.')
-      const data = await res.json()
+      const payload = await res.json()
+      const data = Array.isArray(payload) ? payload : (Array.isArray(payload?.data) ? payload.data : [])
+
       setExternalList(data)
+      setExternalPage(page)
+      setExternalPageSize(take)
+      setExternalTotalCount(Array.isArray(payload) ? -1 : Number(payload?.totalCount ?? -1))
+      setExternalHasMore(Array.isArray(payload) ? data.length === take : Boolean(payload?.hasMore))
       setShowExternal(true)
     } catch (err) {
       showStatus(err.message, 'error')
     } finally {
       setIsLoadingExternal(false)
     }
-  }
+  }, [externalDepartment, externalPageSize])
 
-  const onAddFromExternal = async (name) => {
-    const key = name
+  const onAddFromExternal = async (eId, name) => {
+    const key = eId || name
     try {
       setAddingIds((prev) => new Set(prev).add(key))
       const res = await fetch('/api/employees', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name }),
+        body: JSON.stringify({ eId, name, requiresBadgeSwipe: true }),
       })
       if (!res.ok) throw new Error('Unable to add employee.')
 
       // Mark as added in external list
       setExternalList((prev) =>
-        prev.map((emp) => (emp.name === name ? { ...emp, alreadyAdded: true } : emp)),
+        prev.map((emp) => ((emp.eId && emp.eId === eId) || emp.name === name ? { ...emp, alreadyAdded: true } : emp)),
       )
       showStatus(`"${name}" added successfully.`, 'success')
       await loadEmployees()
@@ -148,7 +148,30 @@ function EmployeesPage() {
     }
   }
 
-  const onDeleteEmployee = async (id, name) => {
+  const onToggleBadgeRequirement = async (row) => {
+    const nextValue = !row.requiresBadgeSwipe
+    try {
+      const res = await fetch(`/api/employees/${row.sourceId ?? row.id}/badge-requirement`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ requiresBadgeSwipe: nextValue }),
+      })
+      if (!res.ok) throw new Error('Unable to update badge requirement.')
+
+      setEmployees((prev) =>
+        prev.map((emp) =>
+          (emp.sourceId ?? emp.id) === (row.sourceId ?? row.id)
+            ? { ...emp, requiresBadgeSwipe: nextValue }
+            : emp,
+        ),
+      )
+      showStatus(`Updated badge requirement for "${row.name}".`, 'success')
+    } catch (err) {
+      showStatus(err.message, 'error')
+    }
+  }
+
+  const onDeleteEmployee = async (id, name, eId) => {
     if (!window.confirm(`Delete "${name}" (ID: ${id})? This cannot be undone.`)) return
     try {
       const res = await fetch(`/api/employees/${id}`, { method: 'DELETE' })
@@ -158,7 +181,7 @@ function EmployeesPage() {
       // Update external list if visible
       if (showExternal) {
         setExternalList((prev) =>
-          prev.map((emp) => (emp.name === name ? { ...emp, alreadyAdded: false } : emp)),
+          prev.map((emp) => ((emp.eId && emp.eId === eId) || emp.name === name ? { ...emp, alreadyAdded: false } : emp)),
         )
       }
     } catch (err) {
@@ -174,9 +197,39 @@ function EmployeesPage() {
       render: (row) => <span className="font-mono text-sm text-slate-600">{row.id}</span>,
     },
     {
+      key: 'eId',
+      label: 'EID',
+      width: '120px',
+      render: (row) => <span className="font-mono text-sm text-slate-600">{row.eId ?? '—'}</span>,
+    },
+    {
       key: 'name',
       label: 'Name',
       render: (row) => <span className="font-medium text-slate-900">{row.name}</span>,
+    },
+    {
+      key: 'requiresBadgeSwipe',
+      label: 'Badge Requirement',
+      width: '210px',
+      render: (row) => {
+        const required = row.requiresBadgeSwipe
+        return (
+          <button
+            type="button"
+            onClick={() => onToggleBadgeRequirement(row)}
+            className={`inline-flex items-center gap-2 rounded-full px-3 py-1 text-xs font-semibold transition-colors ${
+              required
+                ? 'bg-amber-50 text-amber-700 ring-1 ring-amber-200 hover:bg-amber-100'
+                : 'bg-emerald-50 text-emerald-700 ring-1 ring-emerald-200 hover:bg-emerald-100'
+            }`}
+          >
+            <span
+              className={`h-1.5 w-1.5 rounded-full ${required ? 'bg-amber-600' : 'bg-emerald-600'}`}
+            />
+            {required ? 'Must Swipe Badge' : 'No Badge Required'}
+          </button>
+        )
+      },
     },
     {
       key: 'actions',
@@ -185,7 +238,7 @@ function EmployeesPage() {
       render: (row) => (
         <button
           type="button"
-          onClick={() => onDeleteEmployee(row.sourceId ?? row.id, row.name)}
+          onClick={() => onDeleteEmployee(row.sourceId ?? row.id, row.name, row.eId)}
           disabled={!row.sourceId}
           className="rounded-md px-2.5 py-1 text-xs font-medium text-red-600 transition-all duration-150 hover:bg-red-50 hover:text-red-700 active:scale-95"
         >
@@ -209,7 +262,8 @@ function EmployeesPage() {
             if (showExternal) {
               setShowExternal(false)
             } else {
-              loadExternalEmployees()
+              setExternalSearch('')
+              loadExternalEmployees(1)
             }
           }}
           disabled={isLoadingExternal}
@@ -254,76 +308,146 @@ function EmployeesPage() {
         </div>
       )}
 
-      {/* External API Import Panel */}
-      {showExternal && (
-        <div className="animate-scale-in overflow-hidden rounded-xl bg-white shadow-sm ring-1 ring-indigo-200/60">
-          <div className="border-b border-indigo-100 bg-indigo-50/50 px-4 py-3">
-            <div className="flex items-center justify-between">
-              <h3 className="text-sm font-semibold text-indigo-900">
-                Import from External API
-                <span className="ml-2 text-xs font-normal text-indigo-600">
-                  ({externalList.filter((e) => !e.alreadyAdded).length} available)
-                </span>
-              </h3>
-            </div>
-            <div className="relative mt-2">
-              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-indigo-400">
-                <path fillRule="evenodd" d="M9 3.5a5.5 5.5 0 1 0 0 11 5.5 5.5 0 0 0 0-11ZM2 9a7 7 0 1 1 12.452 4.391l3.328 3.329a.75.75 0 1 1-1.06 1.06l-3.329-3.328A7 7 0 0 1 2 9Z" clipRule="evenodd" />
-              </svg>
-              <input
-                value={externalSearch}
-                onChange={(e) => setExternalSearch(e.target.value)}
-                type="text"
-                placeholder="Search external employees..."
-                className="w-full rounded-lg border border-indigo-200 bg-white py-2 pl-9 pr-4 text-sm text-slate-700 placeholder:text-indigo-400 focus:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
-              />
-            </div>
-          </div>
-          <div className="max-h-72 overflow-y-auto">
-            {filteredExternal.length === 0 ? (
-              <div className="px-4 py-8 text-center text-sm text-slate-400">
-                No external employees found.
+      {/* External API Import Popup */}
+      {showExternal && createPortal(
+        <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-slate-900/55 p-4">
+          <div className="animate-scale-in flex h-[85vh] w-full max-w-6xl flex-col overflow-hidden rounded-2xl bg-white shadow-2xl ring-1 ring-indigo-200/70">
+            <div className="border-b border-indigo-100 bg-indigo-50/70 px-5 py-4">
+              <div className="flex items-center justify-between gap-3">
+                <h3 className="text-base font-semibold text-indigo-950">
+                  Import from External API
+                  <span className="ml-2 text-sm font-normal text-indigo-700">
+                    ({filteredExternal.length}/{externalTotalCount >= 0 ? externalTotalCount : '...'} shown)
+                  </span>
+                </h3>
+                <button
+                  type="button"
+                  onClick={() => setShowExternal(false)}
+                  className="rounded-lg px-3 py-1.5 text-sm font-medium text-indigo-700 transition-colors hover:bg-indigo-100"
+                >
+                  Close
+                </button>
               </div>
-            ) : (
-              <table className="min-w-full text-left text-sm">
-                <thead>
-                  <tr className="border-b border-slate-100 bg-slate-50/50">
-                    <th className="whitespace-nowrap px-4 py-2 text-xs font-semibold uppercase tracking-wider text-slate-500">EID</th>
-                    <th className="whitespace-nowrap px-4 py-2 text-xs font-semibold uppercase tracking-wider text-slate-500">Name</th>
-                    <th className="whitespace-nowrap px-4 py-2 text-xs font-semibold uppercase tracking-wider text-slate-500 text-right">Action</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-50">
-                  {filteredExternal.map((emp) => (
-                    <tr key={emp.eId ?? emp.name} className="transition-colors hover:bg-slate-50/60">
-                      <td className="whitespace-nowrap px-4 py-2.5 font-mono text-sm text-slate-600">{emp.eId ?? '—'}</td>
-                      <td className="px-4 py-2.5 text-slate-700">{emp.name}</td>
-                      <td className="whitespace-nowrap px-4 py-2.5 text-right">
-                        {emp.alreadyAdded ? (
-                          <span className="inline-flex items-center gap-1 text-xs text-emerald-600">
-                            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="h-3.5 w-3.5">
-                              <path fillRule="evenodd" d="M16.704 4.153a.75.75 0 0 1 .143 1.052l-8 10.5a.75.75 0 0 1-1.127.075l-4.5-4.5a.75.75 0 0 1 1.06-1.06l3.894 3.893 7.48-9.817a.75.75 0 0 1 1.05-.143Z" clipRule="evenodd" />
-                            </svg>
-                            Added
-                          </span>
-                        ) : (
-                          <button
-                            type="button"
-                            onClick={() => onAddFromExternal(emp.name)}
-                            disabled={addingIds.has(emp.name)}
-                            className="rounded-md bg-indigo-600 px-2.5 py-1 text-xs font-medium text-white transition-all duration-150 hover:bg-indigo-500 active:scale-95 disabled:opacity-50"
-                          >
-                            {addingIds.has(emp.name) ? '...' : 'Add'}
-                          </button>
-                        )}
-                      </td>
+
+              <div className="mt-3 grid gap-3 sm:grid-cols-[1fr_220px_120px_90px]">
+                <div className="relative">
+                  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-indigo-400">
+                    <path fillRule="evenodd" d="M9 3.5a5.5 5.5 0 1 0 0 11 5.5 5.5 0 0 0 0-11ZM2 9a7 7 0 1 1 12.452 4.391l3.328 3.329a.75.75 0 1 1-1.06 1.06l-3.329-3.328A7 7 0 0 1 2 9Z" clipRule="evenodd" />
+                  </svg>
+                  <input
+                    value={externalSearch}
+                    onChange={(e) => setExternalSearch(e.target.value)}
+                    type="text"
+                    placeholder="Search by EID or Name..."
+                    className="w-full rounded-lg border border-indigo-200 bg-white py-2 pl-9 pr-4 text-sm text-slate-700 placeholder:text-indigo-400 focus:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
+                  />
+                </div>
+
+                <input
+                  value={externalDepartment}
+                  onChange={(e) => setExternalDepartment(e.target.value)}
+                  type="text"
+                  placeholder="Department"
+                  className="rounded-lg border border-indigo-200 bg-white px-3 py-2 text-sm text-slate-700 focus:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
+                />
+
+                <select
+                  value={externalPageSize}
+                  onChange={(e) => {
+                    const nextSize = Number(e.target.value)
+                    loadExternalEmployees(1, nextSize)
+                  }}
+                  className="rounded-lg border border-indigo-200 bg-white px-3 py-2 text-sm text-slate-700 focus:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
+                >
+                  <option value={25}>25</option>
+                  <option value={50}>50</option>
+                  <option value={100}>100</option>
+                </select>
+
+                <button
+                  type="button"
+                  onClick={() => loadExternalEmployees(1)}
+                  className="rounded-lg bg-indigo-600 px-3 py-2 text-sm font-semibold text-white transition-colors hover:bg-indigo-500"
+                >
+                  Apply
+                </button>
+              </div>
+            </div>
+
+            <div className="min-h-0 flex-1 overflow-auto">
+              {filteredExternal.length === 0 ? (
+                <div className="px-4 py-12 text-center text-sm text-slate-400">
+                  No external employees found.
+                </div>
+              ) : (
+                <table className="min-w-full text-left text-sm">
+                  <thead className="sticky top-0 z-10">
+                    <tr className="border-b border-slate-100 bg-slate-50/95 backdrop-blur-sm">
+                      <th className="whitespace-nowrap px-4 py-2 text-xs font-semibold uppercase tracking-wider text-slate-500">EID</th>
+                      <th className="whitespace-nowrap px-4 py-2 text-xs font-semibold uppercase tracking-wider text-slate-500">Name</th>
+                      <th className="whitespace-nowrap px-4 py-2 text-xs font-semibold uppercase tracking-wider text-slate-500">Department</th>
+                      <th className="whitespace-nowrap px-4 py-2 text-xs font-semibold uppercase tracking-wider text-slate-500 text-right">Action</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
-            )}
+                  </thead>
+                  <tbody className="divide-y divide-slate-50">
+                    {filteredExternal.map((emp) => (
+                      <tr key={emp.eId ?? emp.name} className="transition-colors hover:bg-slate-50/60">
+                        <td className="whitespace-nowrap px-4 py-2.5 font-mono text-sm text-slate-600">{emp.eId ?? '—'}</td>
+                        <td className="px-4 py-2.5 text-slate-700">{emp.name}</td>
+                        <td className="px-4 py-2.5 text-slate-600">{emp.department || '—'}</td>
+                        <td className="whitespace-nowrap px-4 py-2.5 text-right">
+                          {emp.alreadyAdded ? (
+                            <span className="inline-flex items-center gap-1 text-xs text-emerald-600">
+                              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="h-3.5 w-3.5">
+                                <path fillRule="evenodd" d="M16.704 4.153a.75.75 0 0 1 .143 1.052l-8 10.5a.75.75 0 0 1-1.127.075l-4.5-4.5a.75.75 0 0 1 1.06-1.06l3.894 3.893 7.48-9.817a.75.75 0 0 1 1.05-.143Z" clipRule="evenodd" />
+                              </svg>
+                              Added
+                            </span>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => onAddFromExternal(emp.eId, emp.name)}
+                              disabled={addingIds.has(emp.eId || emp.name)}
+                              className="rounded-md bg-indigo-600 px-2.5 py-1 text-xs font-medium text-white transition-all duration-150 hover:bg-indigo-500 active:scale-95 disabled:opacity-50"
+                            >
+                              {addingIds.has(emp.eId || emp.name) ? '...' : 'Add'}
+                            </button>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </div>
+
+            <div className="flex items-center justify-between border-t border-slate-100 bg-slate-50/70 px-5 py-3 text-sm text-slate-600">
+              <span>
+                Page {externalPage}
+                {externalTotalCount > 0 ? ` of ${Math.ceil(externalTotalCount / externalPageSize)}` : ''}
+              </span>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => loadExternalEmployees(externalPage - 1)}
+                  disabled={isLoadingExternal || externalPage <= 1}
+                  className="rounded-md border border-slate-300 px-3 py-1.5 text-slate-700 transition-colors hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  Prev
+                </button>
+                <button
+                  type="button"
+                  onClick={() => loadExternalEmployees(externalPage + 1)}
+                  disabled={isLoadingExternal || !externalHasMore}
+                  className="rounded-md border border-slate-300 px-3 py-1.5 text-slate-700 transition-colors hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  Next
+                </button>
+              </div>
+            </div>
           </div>
-        </div>
+        </div>,
+        document.body
       )}
 
       {/* Search local employees */}

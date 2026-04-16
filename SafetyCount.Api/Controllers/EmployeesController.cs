@@ -13,19 +13,72 @@ public class EmployeesController(ApplicationDbContext dbContext, IHttpClientFact
     private const string EmployeeServicePath =
         "ITM/Employee.Service/api/Employee/GetAllThai";
 
+    private static string BuildExternalEmployeeQuery(int skip, int take, string? department)
+    {
+        var sort = """[{"selector":"EId","desc":false}]""";
+        var queryParts = new List<string>
+        {
+            $"skip={skip}",
+            $"take={take}",
+            $"sort={Uri.EscapeDataString(sort)}"
+        };
+
+        if (!string.IsNullOrWhiteSpace(department))
+        {
+            var filter = $"""["Department","=","{department}"]""";
+            queryParts.Add($"filter={Uri.EscapeDataString(filter)}");
+        }
+
+        return string.Join("&", queryParts);
+    }
+
     /// <summary>
-    /// Get employees from external API by department.
+    /// Get employees from the local database table, optionally filtered by department.
     /// </summary>
     [HttpGet]
     public async Task<IActionResult> GetEmployees(
-        [FromQuery] string department = "SA",
+        [FromQuery] string? department,
         [FromQuery] int skip = 0,
         [FromQuery] int take = 40,
         CancellationToken cancellationToken = default)
     {
-        var sort = """[{"selector":"EId","desc":false}]""";
-        var filter = $"""["Department","=","{department}"]""";
-        var query = $"skip={skip}&take={take}&sort={Uri.EscapeDataString(sort)}&filter={Uri.EscapeDataString(filter)}";
+        var query = dbContext.Employees
+            .AsNoTracking()
+            .AsQueryable();
+
+        if (!string.IsNullOrWhiteSpace(department))
+        {
+            query = query.Where(e => e.Department == department);
+        }
+
+        var employees = await query
+            .OrderBy(e => e.Id)
+            .Skip(skip)
+            .Take(take)
+            .Select(e => new
+            {
+                e.Id,
+                e.EId,
+                e.Name,
+                e.Department,
+                e.RequiresBadgeSwipe
+            })
+            .ToListAsync(cancellationToken);
+
+        return Ok(employees);
+    }
+
+    /// <summary>
+    /// Get employees from the external API in raw format.
+    /// </summary>
+    [HttpGet("external/raw")]
+    public async Task<IActionResult> GetExternalEmployeesRaw(
+        [FromQuery] string? department,
+        [FromQuery] int skip = 0,
+        [FromQuery] int take = 40,
+        CancellationToken cancellationToken = default)
+    {
+        var query = BuildExternalEmployeeQuery(skip, take, department);
 
         var client = httpClientFactory.CreateClient("EmployeeService");
 
@@ -59,25 +112,54 @@ public class EmployeesController(ApplicationDbContext dbContext, IHttpClientFact
             return BadRequest("Employee name is required.");
         }
 
-        // Ensure default department exists
-        var defaultDepartment = await dbContext.Departments.FirstOrDefaultAsync(d => d.Name == "Default", cancellationToken);
-        if (defaultDepartment is null)
+        var trimmedEId = string.IsNullOrWhiteSpace(dto.EId) ? null : dto.EId.Trim();
+        if (!string.IsNullOrWhiteSpace(trimmedEId))
         {
-            defaultDepartment = new Department { Name = "Default" };
-            dbContext.Departments.Add(defaultDepartment);
-            await dbContext.SaveChangesAsync(cancellationToken);
+            var duplicateEId = await dbContext.Employees
+                .AsNoTracking()
+                .AnyAsync(e => e.EId == trimmedEId, cancellationToken);
+            if (duplicateEId)
+            {
+                return Conflict($"Employee EId '{trimmedEId}' already exists.");
+            }
         }
 
         var employee = new Employee
         {
+            EId = trimmedEId,
             Name = dto.Name.Trim(),
-            DepartmentId = defaultDepartment.Id
+            Department = string.IsNullOrWhiteSpace(dto.Department) ? null : dto.Department.Trim(),
+            RequiresBadgeSwipe = dto.RequiresBadgeSwipe ?? true
         };
 
         dbContext.Employees.Add(employee);
         await dbContext.SaveChangesAsync(cancellationToken);
 
-        return Ok(new { employee.Id, employee.Name });
+        return Ok(new { employee.Id, employee.EId, employee.Name, employee.Department, employee.RequiresBadgeSwipe });
+    }
+
+    [HttpPatch("{id:int}/badge-requirement")]
+    public async Task<IActionResult> UpdateBadgeRequirement(
+        int id,
+        [FromBody] EmployeeBadgeRequirementUpdateDto dto,
+        CancellationToken cancellationToken)
+    {
+        var employee = await dbContext.Employees.FindAsync([id], cancellationToken);
+        if (employee is null)
+        {
+            return NotFound($"Employee {id} was not found.");
+        }
+
+        employee.RequiresBadgeSwipe = dto.RequiresBadgeSwipe;
+        await dbContext.SaveChangesAsync(cancellationToken);
+
+        return Ok(new
+        {
+            employee.Id,
+            employee.EId,
+            employee.Name,
+            employee.RequiresBadgeSwipe
+        });
     }
 
     /// <summary>
@@ -103,16 +185,14 @@ public class EmployeesController(ApplicationDbContext dbContext, IHttpClientFact
     /// </summary>
     [HttpGet("external")]
     public async Task<IActionResult> GetExternalEmployees(
-        [FromQuery] string department = "SA",
+        [FromQuery] string? department,
         [FromQuery] int skip = 0,
-        [FromQuery] int take = 100,
+        [FromQuery] int take = 50,
         CancellationToken cancellationToken = default)
     {
-        var sort = """[{"selector":"EId","desc":false}]""";
-        var filter = $"""["Department","=","{department}"]""";
-        var query = $"skip={skip}&take={take}&sort={Uri.EscapeDataString(sort)}&filter={Uri.EscapeDataString(filter)}";
-
+        var safeTake = take <= 0 ? 50 : Math.Min(take, 500);
         var client = httpClientFactory.CreateClient("EmployeeService");
+        var query = BuildExternalEmployeeQuery(skip, safeTake, department);
 
         HttpResponseMessage response;
         try
@@ -133,16 +213,20 @@ public class EmployeesController(ApplicationDbContext dbContext, IHttpClientFact
         var payload = System.Text.Json.JsonSerializer.Deserialize<ExternalEmployeeResponse>(content,
             new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true });
 
-        if (payload?.Data is null)
-        {
-            return Ok(Array.Empty<object>());
-        }
+        var pageItems = payload?.Data ?? [];
 
-        var existingNames = await dbContext.Employees
+        var existingEmployees = await dbContext.Employees
+            .Select(x => new { x.EId, x.Name })
+            .ToListAsync(cancellationToken);
+        var existingEIds = existingEmployees
+            .Where(x => !string.IsNullOrWhiteSpace(x.EId))
+            .Select(x => x.EId!)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var existingNames = existingEmployees
             .Select(x => x.Name)
-            .ToHashSetAsync(cancellationToken);
+            .ToHashSet();
 
-        var result = payload.Data
+        var result = pageItems
             .Select(ext =>
             {
                 var name = $"{ext.ThaiPrefix ?? ""}{ext.ThaiFirstName ?? ""} {ext.ThaiLastName ?? ""}".Trim();
@@ -151,13 +235,27 @@ public class EmployeesController(ApplicationDbContext dbContext, IHttpClientFact
                     eId = ext.EId,
                     name,
                     department = ext.Department,
-                    alreadyAdded = existingNames.Contains(name)
+                    alreadyAdded =
+                        (!string.IsNullOrWhiteSpace(ext.EId) && existingEIds.Contains(ext.EId)) ||
+                        existingNames.Contains(name)
                 };
             })
             .Where(x => !string.IsNullOrWhiteSpace(x.name))
             .ToList();
 
-        return Ok(result);
+        var totalCount = payload?.TotalCount ?? -1;
+        var hasMore = totalCount >= 0
+            ? skip + result.Count < totalCount
+            : result.Count == safeTake;
+
+        return Ok(new
+        {
+            data = result,
+            totalCount,
+            skip,
+            take = safeTake,
+            hasMore
+        });
     }
 
     /// <summary>
@@ -166,13 +264,11 @@ public class EmployeesController(ApplicationDbContext dbContext, IHttpClientFact
     /// </summary>
     [HttpPost("sync")]
     public async Task<IActionResult> SyncFromExternalApi(
-        [FromQuery] string department = "SA",
+        [FromQuery] string? department,
         [FromQuery] int take = 100,
         CancellationToken cancellationToken = default)
     {
-        var sort = """[{"selector":"EId","desc":false}]""";
-        var filter = $"""["Department","=","{department}"]""";
-        var query = $"skip=0&take={take}&sort={Uri.EscapeDataString(sort)}&filter={Uri.EscapeDataString(filter)}";
+        var query = BuildExternalEmployeeQuery(0, take, department);
 
         var client = httpClientFactory.CreateClient("EmployeeService");
 
@@ -200,33 +296,42 @@ public class EmployeesController(ApplicationDbContext dbContext, IHttpClientFact
             return Ok(new { added = 0, message = "No employees found from external API." });
         }
 
-        // Ensure default department exists
-        var defaultDepartment = await dbContext.Departments.FirstOrDefaultAsync(d => d.Name == "Default", cancellationToken);
-        if (defaultDepartment is null)
-        {
-            defaultDepartment = new Department { Name = "Default" };
-            dbContext.Departments.Add(defaultDepartment);
-            await dbContext.SaveChangesAsync(cancellationToken);
-        }
-
-        var existingNames = await dbContext.Employees
+        var existingEmployees = await dbContext.Employees
+            .Select(x => new { x.EId, x.Name })
+            .ToListAsync(cancellationToken);
+        var existingEIds = existingEmployees
+            .Where(x => !string.IsNullOrWhiteSpace(x.EId))
+            .Select(x => x.EId!)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var existingNames = existingEmployees
             .Select(x => x.Name)
-            .ToHashSetAsync(cancellationToken);
+            .ToHashSet();
 
         var added = 0;
         foreach (var ext in payload.Data)
         {
             var name = $"{ext.ThaiPrefix ?? ""}{ext.ThaiFirstName ?? ""} {ext.ThaiLastName ?? ""}".Trim();
-            if (string.IsNullOrWhiteSpace(name) || existingNames.Contains(name))
+            var eId = string.IsNullOrWhiteSpace(ext.EId) ? null : ext.EId.Trim();
+            if (
+                string.IsNullOrWhiteSpace(name) ||
+                (!string.IsNullOrWhiteSpace(eId) && existingEIds.Contains(eId)) ||
+                existingNames.Contains(name)
+            )
             {
                 continue;
             }
 
             dbContext.Employees.Add(new Employee
             {
+                EId = eId,
                 Name = name,
-                DepartmentId = defaultDepartment.Id
+                Department = string.IsNullOrWhiteSpace(ext.Department) ? null : ext.Department.Trim(),
+                RequiresBadgeSwipe = true
             });
+            if (!string.IsNullOrWhiteSpace(eId))
+            {
+                existingEIds.Add(eId);
+            }
             existingNames.Add(name);
             added++;
         }
@@ -239,6 +344,8 @@ public class EmployeesController(ApplicationDbContext dbContext, IHttpClientFact
     private class ExternalEmployeeResponse
     {
         public List<ExternalEmployee>? Data { get; set; }
+
+        public int? TotalCount { get; set; }
     }
 
     private class ExternalEmployee

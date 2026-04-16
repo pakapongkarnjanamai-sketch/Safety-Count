@@ -1,0 +1,47 @@
+{
+    // Use IntelliSense to learn about possible attributes.
+    // Hover to view descriptions of existing attributes.
+    // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
+    "version": "0.2.0",
+    "compounds": [
+        {
+            "name": "Run Full Stack (Backend + Frontend)",
+            "configurations": [
+                "Backend: SafetyCount.Api",
+                "Frontend: Vite Dev Server"
+            ],
+            "stopAll": true
+        },
+        {
+            "name": "Run Full Stack + Browser",
+            "configurations": [
+                "Backend: SafetyCount.Api",
+                "Frontend: Vite Dev Server",
+                "Frontend: Chrome (Vite)"
+            ],
+            "stopAll": true
+        }
+    ],
+    "configurations": [
+        {
+            "type": "dotnet",
+            "request": "launch",
+            "name": "Backend: SafetyCount.Api",
+            "projectPath": "${workspaceFolder}/SafetyCount.Api/SafetyCount.Api.csproj"
+        },
+        {
+            "type": "node-terminal",
+            "request": "launch",
+            "name": "Frontend: Vite Dev Server",
+            "command": "npm run dev",
+            "cwd": "${workspaceFolder}/safetycount-web"
+        },
+        {
+            "type": "chrome",
+            "request": "launch",
+            "name": "Frontend: Chrome (Vite)",
+            "url": "http://localhost:5173",
+            "webRoot": "${workspaceFolder}/safetycount-web/src"
+        }
+    ]
+}

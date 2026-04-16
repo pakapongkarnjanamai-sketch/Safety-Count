@@ -1,5 +1,4 @@
 import MorningCheckIn from './components/MorningCheckIn'
-import EvacuationCheckIn from './components/EvacuationCheckIn'
 
 function App() {
   return (
@@ -10,7 +9,6 @@ function App() {
       </header>
 
       <MorningCheckIn />
-      <EvacuationCheckIn />
     </main>
   )
 }

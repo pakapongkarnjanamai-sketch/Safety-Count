@@ -1,6 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using SafetyCount.Api.Data;
 using SafetyCount.Api.Services;
+using Scalar.AspNetCore;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -13,12 +14,18 @@ builder.Services.AddDbContext<ApplicationDbContext>(options =>
         ?? "Server=(localdb)\\mssqllocaldb;Database=SafetyCountDb;Trusted_Connection=True;TrustServerCertificate=True"));
 
 builder.Services.AddScoped<IBadgeFileReaderService, BadgeFileReaderService>();
+builder.Services.AddHttpClient("EmployeeService", client =>
+{
+    client.BaseAddress = new Uri("https://ap-ntc2138-qawb/");
+    client.DefaultRequestHeaders.Add("Accept", "application/json");
+});
 
 var app = builder.Build();
 
 if (app.Environment.IsDevelopment())
 {
     app.MapOpenApi();
+    app.MapScalarApiReference();
 }
 
 app.UseHttpsRedirection();

@@ -1,25 +1,66 @@
 import { useEffect, useState } from 'react'
 
-const mockDepartmentEmployees = [
-  { id: 4804120, name: 'Anan Promchai' },
-  { id: 4804121, name: 'Kanda Sookjai' },
-  { id: 4804122, name: 'Suriya Thepsiri' },
-]
+const EMPLOYEE_API_URL = '/api/employees?department=SA&skip=0&take=40'
+
+function mapEmployeeToRow(employee) {
+  const parsedEmployeeId = Number(employee.EId)
+  const employeeId = Number.isNaN(parsedEmployeeId) ? Number(employee.Id) : parsedEmployeeId
+  const name = `${employee.ThaiPrefix ?? ''}${employee.ThaiFirstName ?? ''} ${employee.ThaiLastName ?? ''}`.trim()
+
+  return {
+    employeeId,
+    name,
+    isPresent: true,
+    remark: '',
+  }
+}
 
 function MorningCheckIn() {
   const [rows, setRows] = useState([])
   const [isSubmitting, setIsSubmitting] = useState(false)
+  const [isLoadingEmployees, setIsLoadingEmployees] = useState(false)
   const [statusMessage, setStatusMessage] = useState('')
 
   useEffect(() => {
-    setRows(
-      mockDepartmentEmployees.map((employee) => ({
-        employeeId: employee.id,
-        name: employee.name,
-        isPresent: true,
-        remark: '',
-      })),
-    )
+    let isMounted = true
+
+    const loadEmployees = async () => {
+      try {
+        setIsLoadingEmployees(true)
+        setStatusMessage('')
+
+        const response = await fetch(EMPLOYEE_API_URL)
+        if (!response.ok) {
+          throw new Error('Unable to load employees.')
+        }
+
+        const payload = await response.json()
+        const employeeRows = Array.isArray(payload?.data)
+          ? payload.data
+              .map(mapEmployeeToRow)
+              .filter((row) => Number.isInteger(row.employeeId) && row.employeeId > 0)
+          : []
+
+        if (isMounted) {
+          setRows(employeeRows)
+        }
+      } catch (error) {
+        if (isMounted) {
+          setStatusMessage(error.message)
+          setRows([])
+        }
+      } finally {
+        if (isMounted) {
+          setIsLoadingEmployees(false)
+        }
+      }
+    }
+
+    loadEmployees()
+
+    return () => {
+      isMounted = false
+    }
   }, [])
 
   const onTogglePresent = (employeeId, isPresent) => {
@@ -109,7 +150,7 @@ function MorningCheckIn() {
         <button
           type="button"
           onClick={onSubmit}
-          disabled={isSubmitting || rows.length === 0}
+          disabled={isSubmitting || isLoadingEmployees || rows.length === 0}
           className="rounded bg-indigo-600 px-4 py-2 font-medium text-white disabled:cursor-not-allowed disabled:opacity-60"
         >
           {isSubmitting ? 'Submitting...' : 'Submit Attendance'}

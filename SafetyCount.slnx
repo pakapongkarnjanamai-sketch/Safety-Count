@@ -1,0 +1,4 @@
+<Solution>
+  <Project Path="SafetyCount.Api.Tests/SafetyCount.Api.Tests.csproj" />
+  <Project Path="SafetyCount.Api/SafetyCount.Api.csproj" />
+</Solution>

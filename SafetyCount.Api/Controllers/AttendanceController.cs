@@ -20,7 +20,7 @@ public class AttendanceController(
 {
     /// <summary>
     /// Get attendance for a specific date. If no records exist for that date,
-    /// auto-generates records for all employees with IsPresent = true.
+    /// auto-generates records for employees that require badge swipe.
     /// </summary>
     [HttpGet("{date:datetime}")]
     public async Task<IActionResult> GetAttendanceByDate(DateTime date, CancellationToken cancellationToken)
@@ -34,7 +34,9 @@ public class AttendanceController(
         // Auto-generate if no records exist for this date
         if (records.Count == 0)
         {
-            var employees = await dbContext.Employees.ToListAsync(cancellationToken);
+            var employees = await dbContext.Employees
+                .Where(x => x.RequiresBadgeSwipe)
+                .ToListAsync(cancellationToken);
 
             foreach (var emp in employees)
             {
@@ -198,7 +200,10 @@ public class AttendanceController(
 
     [HttpPost("internal/crosscheck-badges/share")]
     [ApiExplorerSettings(IgnoreApi = true)]
-    public async Task<IActionResult> CrossCheckBadgesFromShare([FromQuery] string? fileName, CancellationToken cancellationToken)
+    public async Task<IActionResult> CrossCheckBadgesFromShare(
+        [FromQuery] DateTime? attendanceDate,
+        [FromQuery] string? fileName,
+        CancellationToken cancellationToken)
     {
         var shareDirectory = badgeFileSettings.Value.ShareDirectory;
         if (string.IsNullOrWhiteSpace(shareDirectory))
@@ -206,8 +211,9 @@ public class AttendanceController(
             return StatusCode(500, "BadgeFileSettings:ShareDirectory is not configured.");
         }
 
+        var targetDate = (attendanceDate ?? DateTime.Today).Date;
         var resolvedFileName = string.IsNullOrWhiteSpace(fileName)
-            ? $"{DateTime.Today.ToString("ddMMMyy", CultureInfo.InvariantCulture).ToUpperInvariant()}.TAF"
+            ? $"{targetDate.ToString("ddMMMyy", CultureInfo.InvariantCulture).ToUpperInvariant()}.TAF"
             : Path.GetFileName(fileName.Trim());
 
         var filePath = Path.Combine(shareDirectory, resolvedFileName);
@@ -221,6 +227,7 @@ public class AttendanceController(
 
         return Ok(new
         {
+            attendanceDate = targetDate,
             fileName = resolvedFileName,
             filePath,
             swipeCount = badgeSwipes.Count,

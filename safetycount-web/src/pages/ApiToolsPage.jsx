@@ -3,9 +3,17 @@ import { useMemo, useState } from 'react'
 function ApiToolsPage() {
   const [status, setStatus] = useState({ type: '', message: '' })
 
-  const [shareFileName, setShareFileName] = useState('')
+  const [shareAttendanceDate, setShareAttendanceDate] = useState('')
   const [isRunningShareCheck, setIsRunningShareCheck] = useState(false)
   const [shareResult, setShareResult] = useState(null)
+  const [isRunningCombined, setIsRunningCombined] = useState(false)
+  const [combinedResult, setCombinedResult] = useState(null)
+  const [combinedAttendanceDate, setCombinedAttendanceDate] = useState('')
+  const [combinedTo, setCombinedTo] = useState('')
+  const [combinedRecipients, setCombinedRecipients] = useState('')
+  const [combinedSubject, setCombinedSubject] = useState('Daily Attendance Report')
+  const [combinedIncludeAttendanceTable, setCombinedIncludeAttendanceTable] = useState(true)
+  const [combinedEmailBody, setCombinedEmailBody] = useState('')
 
   const [badgeFile, setBadgeFile] = useState(null)
   const [isRunningUploadCheck, setIsRunningUploadCheck] = useState(false)
@@ -25,6 +33,11 @@ function ApiToolsPage() {
     return Boolean(hasRecipient && emailSubject.trim())
   }, [emailTo, emailRecipients, emailSubject])
 
+  const canSubmitCombined = useMemo(() => {
+    const hasRecipient = combinedTo.trim() || combinedRecipients.trim()
+    return Boolean(hasRecipient && combinedSubject.trim())
+  }, [combinedTo, combinedRecipients, combinedSubject])
+
   const showStatus = (type, message) => {
     setStatus({ type, message })
     window.setTimeout(() => {
@@ -43,8 +56,8 @@ function ApiToolsPage() {
       setIsRunningShareCheck(true)
       setShareResult(null)
       const params = new URLSearchParams()
-      if (shareFileName.trim()) {
-        params.set('fileName', shareFileName.trim())
+      if (shareAttendanceDate) {
+        params.set('attendanceDate', shareAttendanceDate)
       }
 
       const query = params.toString()
@@ -138,6 +151,49 @@ function ApiToolsPage() {
     }
   }
 
+  const onRunShareCrossCheckAndSendEmail = async () => {
+    if (!canSubmitCombined) {
+      showStatus('error', 'Please provide recipient(s) and subject.')
+      return
+    }
+
+    try {
+      setIsRunningCombined(true)
+      setCombinedResult(null)
+
+      const combinedPayload = {
+        attendanceDate: combinedAttendanceDate || null,
+        to: combinedTo.trim() || null,
+        recipients: parseMultiRecipients(combinedRecipients),
+        subject: combinedSubject.trim(),
+        body: combinedIncludeAttendanceTable ? '' : combinedEmailBody,
+        includeAttendanceTable: combinedIncludeAttendanceTable,
+        isBodyHtml: combinedIncludeAttendanceTable,
+      }
+
+      const combinedRes = await fetch('/api/notifications/crosscheck-share-and-email', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(combinedPayload),
+      })
+      const combinedPayloadResult = await combinedRes.json().catch(() => ({}))
+      if (!combinedRes.ok) {
+        const detail = combinedPayloadResult?.detail ? ` ${combinedPayloadResult.detail}` : ''
+        throw new Error((combinedPayloadResult?.title ?? combinedPayloadResult?.message ?? 'Unable to run combined flow.') + detail)
+      }
+
+      setShareResult(combinedPayloadResult.crossCheck)
+      setEmailResult(combinedPayloadResult.email)
+      setCombinedResult(combinedPayloadResult)
+
+      showStatus('success', 'Combined flow completed: share cross-check + email sent.')
+    } catch (err) {
+      showStatus('error', err.message)
+    } finally {
+      setIsRunningCombined(false)
+    }
+  }
+
   return (
     <div className="space-y-6">
       <div>
@@ -159,15 +215,15 @@ function ApiToolsPage() {
 
       <section className="rounded-xl bg-white p-5 shadow-sm ring-1 ring-slate-200/70">
         <h2 className="text-base font-semibold text-slate-900">1) Cross-check Badge From Share Path</h2>
-        <p className="mt-1 text-sm text-slate-600">Calls <span className="font-mono">POST /api/attendance/internal/crosscheck-badges/share</span>.</p>
+        <p className="mt-1 text-sm text-slate-600">Calls <span className="font-mono">POST /api/attendance/internal/crosscheck-badges/share</span> and auto-resolves file name as <span className="font-mono">ddMMMyy.TAF</span> from attendance date.</p>
 
         <div className="mt-4 flex flex-wrap items-end gap-3">
           <label className="min-w-72 flex-1">
-            <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-slate-500">File Name (optional)</span>
+            <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-slate-500">Attendance Date (optional)</span>
             <input
-              value={shareFileName}
-              onChange={(e) => setShareFileName(e.target.value)}
-              placeholder="16APR26.TAF"
+              type="date"
+              value={shareAttendanceDate}
+              onChange={(e) => setShareAttendanceDate(e.target.value)}
               className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
             />
           </label>
@@ -299,6 +355,91 @@ function ApiToolsPage() {
 
         {emailResult ? (
           <pre className="mt-4 overflow-auto rounded-lg bg-slate-900 p-3 text-xs text-slate-100">{JSON.stringify(emailResult, null, 2)}</pre>
+        ) : null}
+      </section>
+
+      <section className="rounded-xl bg-white p-5 shadow-sm ring-1 ring-slate-200/70">
+        <h2 className="text-base font-semibold text-slate-900">4) Cross-check Share Path + Send Email (Combined)</h2>
+        <p className="mt-1 text-sm text-slate-600">Calls <span className="font-mono">POST /api/notifications/crosscheck-share-and-email</span> with its own inputs.</p>
+
+        <div className="mt-4 grid gap-3 md:grid-cols-2">
+          <label>
+            <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-slate-500">Attendance Date</span>
+            <input
+              type="date"
+              value={combinedAttendanceDate}
+              onChange={(e) => setCombinedAttendanceDate(e.target.value)}
+              className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-500/20"
+            />
+          </label>
+
+          <label>
+            <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-slate-500">To (single)</span>
+            <input
+              value={combinedTo}
+              onChange={(e) => setCombinedTo(e.target.value)}
+              placeholder="manager@company.com"
+              className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-500/20"
+            />
+          </label>
+
+          <label className="md:col-span-2">
+            <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-slate-500">Recipients (multi, comma/semicolon)</span>
+            <input
+              value={combinedRecipients}
+              onChange={(e) => setCombinedRecipients(e.target.value)}
+              placeholder="a@company.com; b@company.com"
+              className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-500/20"
+            />
+          </label>
+
+          <label className="md:col-span-2">
+            <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-slate-500">Subject</span>
+            <input
+              value={combinedSubject}
+              onChange={(e) => setCombinedSubject(e.target.value)}
+              className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-500/20"
+            />
+          </label>
+
+          <div className="md:col-span-2 flex flex-wrap items-center gap-4">
+            <label className="inline-flex items-center gap-2 text-sm text-slate-700">
+              <input
+                type="checkbox"
+                checked={combinedIncludeAttendanceTable}
+                onChange={(e) => setCombinedIncludeAttendanceTable(e.target.checked)}
+                className="h-4 w-4"
+              />
+              Include attendance table
+            </label>
+          </div>
+
+          {!combinedIncludeAttendanceTable ? (
+            <label className="md:col-span-2">
+              <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-slate-500">Body</span>
+              <textarea
+                value={combinedEmailBody}
+                onChange={(e) => setCombinedEmailBody(e.target.value)}
+                rows={5}
+                className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-500/20"
+              />
+            </label>
+          ) : null}
+        </div>
+
+        <div className="mt-4">
+          <button
+            type="button"
+            onClick={onRunShareCrossCheckAndSendEmail}
+            disabled={isRunningCombined || !canSubmitCombined}
+            className="rounded-lg bg-sky-700 px-4 py-2 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {isRunningCombined ? 'Running Combined Flow...' : 'Run Combined Flow'}
+          </button>
+        </div>
+
+        {combinedResult ? (
+          <pre className="mt-4 overflow-auto rounded-lg bg-slate-900 p-3 text-xs text-slate-100">{JSON.stringify(combinedResult, null, 2)}</pre>
         ) : null}
       </section>
     </div>

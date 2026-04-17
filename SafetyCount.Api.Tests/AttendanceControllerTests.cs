@@ -14,6 +14,42 @@ namespace SafetyCount.Api.Tests;
 public class AttendanceControllerTests
 {
     [Fact]
+    public async Task GetAttendanceByDate_ShouldAutoGenerateOnlyBadgeRequiredEmployees()
+    {
+        var targetDate = DateTime.Today;
+        var options = new DbContextOptionsBuilder<ApplicationDbContext>()
+            .UseInMemoryDatabase(Guid.NewGuid().ToString())
+            .Options;
+
+        await using var dbContext = new ApplicationDbContext(options);
+        dbContext.Employees.AddRange(
+            new Employee { EId = "480412", Name = "Alice", RequiresBadgeSwipe = true },
+            new Employee { EId = "480499", Name = "Bob", RequiresBadgeSwipe = false },
+            new Employee { EId = "480500", Name = "Charlie", RequiresBadgeSwipe = true });
+        await dbContext.SaveChangesAsync();
+
+        var controller = new AttendanceController(
+            dbContext,
+            new BadgeFileReaderService(),
+            new BadgeAttendanceService(dbContext),
+            Microsoft.Extensions.Options.Options.Create(new BadgeFileSettings()));
+
+        var actionResult = await controller.GetAttendanceByDate(targetDate, CancellationToken.None);
+
+        var okResult = Assert.IsType<OkObjectResult>(actionResult);
+        Assert.NotNull(okResult.Value);
+
+        var allAttendances = await dbContext.DailyAttendances
+            .Where(x => x.Date == targetDate)
+            .OrderBy(x => x.EmployeeId)
+            .ToListAsync();
+
+        Assert.Equal(2, allAttendances.Count);
+        Assert.Equal("480412", allAttendances[0].EmployeeId);
+        Assert.Equal("480500", allAttendances[1].EmployeeId);
+    }
+
+    [Fact]
     public async Task CrossCheckBadges_ShouldSetPresentAndAbsentBasedOnInSwipes()
     {
         var today = DateTime.Today;
@@ -107,7 +143,7 @@ public class AttendanceControllerTests
     }
 
     [Fact]
-    public async Task CrossCheckBadges_ShouldKeepNoBadgeRequiredEmployeesPresentWithoutSwipe()
+    public async Task CrossCheckBadges_ShouldSkipEmployeesWithoutBadgeRequirement()
     {
         var today = DateTime.Today;
         var options = new DbContextOptionsBuilder<ApplicationDbContext>()
@@ -138,13 +174,11 @@ public class AttendanceControllerTests
         Assert.NotNull(okResult.Value);
 
         var requiredBadgeAttendance = await dbContext.DailyAttendances.SingleAsync(x => x.EmployeeId == "480412");
-        var noBadgeAttendance = await dbContext.DailyAttendances.SingleAsync(x => x.EmployeeId == "480499");
+        var noBadgeAttendance = await dbContext.DailyAttendances.SingleOrDefaultAsync(x => x.EmployeeId == "480499");
 
         Assert.True(requiredBadgeAttendance.IsPresent);
         Assert.True(requiredBadgeAttendance.IsBadgeCrossChecked);
 
-        Assert.True(noBadgeAttendance.IsPresent);
-        Assert.True(noBadgeAttendance.IsBadgeCrossChecked);
-        Assert.Null(noBadgeAttendance.BadgeSwipeTime);
+        Assert.Null(noBadgeAttendance);
     }
 }

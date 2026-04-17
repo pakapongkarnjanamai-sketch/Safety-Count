@@ -27,7 +27,10 @@ public class BadgeAttendanceService(ApplicationDbContext dbContext) : IBadgeAtte
                 group => group.First().RequiresBadgeSwipe,
                 StringComparer.OrdinalIgnoreCase);
 
-        var employeeIds = employeeSettings.Keys.ToList();
+        var employeeIds = employeeSettings
+            .Where(x => x.Value)
+            .Select(x => x.Key)
+            .ToList();
 
         var todayAttendances = await dbContext.DailyAttendances
             .Where(x => x.Date == DateTime.Today)
@@ -41,13 +44,11 @@ public class BadgeAttendanceService(ApplicationDbContext dbContext) : IBadgeAtte
                 continue;
             }
 
-            var requiresBadgeSwipe = employeeSettings.GetValueOrDefault(employeeId, true);
-
             var attendance = new Models.DailyAttendance
             {
                 EmployeeId = employeeId,
                 Date = today,
-                IsPresent = !requiresBadgeSwipe,
+                IsPresent = false,
                 Remark = null,
                 BadgeSwipeTime = null,
                 IsBadgeCrossChecked = false
@@ -70,16 +71,6 @@ public class BadgeAttendanceService(ApplicationDbContext dbContext) : IBadgeAtte
         {
             if (!todayAttendances.TryGetValue(employeeId, out var attendance))
             {
-                continue;
-            }
-
-            var requiresBadgeSwipe = employeeSettings.GetValueOrDefault(employeeId, true);
-            if (!requiresBadgeSwipe)
-            {
-                attendance.IsPresent = true;
-                attendance.BadgeSwipeTime = null;
-                attendance.IsBadgeCrossChecked = true;
-                updatedCount++;
                 continue;
             }
 

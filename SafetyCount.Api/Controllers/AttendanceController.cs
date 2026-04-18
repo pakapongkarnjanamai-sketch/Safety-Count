@@ -35,7 +35,6 @@ public class AttendanceController(
         if (records.Count == 0)
         {
             var employees = await dbContext.Employees
-                .Where(x => x.RequiresBadgeSwipe)
                 .ToListAsync(cancellationToken);
 
             foreach (var emp in employees)
@@ -233,6 +232,65 @@ public class AttendanceController(
             swipeCount = badgeSwipes.Count,
             updatedCount
         });
+    }
+
+    [HttpPost("{date:datetime}/reset")]
+    public async Task<IActionResult> ResetAndRegenerateAttendance(DateTime date, CancellationToken cancellationToken)
+    {
+        var targetDate = date.Date;
+
+        var existingRecords = await dbContext.DailyAttendances
+            .Where(x => x.Date == targetDate)
+            .ToListAsync(cancellationToken);
+
+        if (existingRecords.Count > 0)
+        {
+            dbContext.DailyAttendances.RemoveRange(existingRecords);
+            await dbContext.SaveChangesAsync(cancellationToken);
+        }
+
+        var employees = await dbContext.Employees
+            .ToListAsync(cancellationToken);
+
+        var newRecords = new List<DailyAttendance>();
+
+        foreach (var emp in employees)
+        {
+            if (string.IsNullOrWhiteSpace(emp.EId))
+            {
+                continue;
+            }
+
+            var attendance = new DailyAttendance
+            {
+                EmployeeId = emp.EId,
+                Date = targetDate,
+                IsPresent = true,
+                Remark = null,
+                IsBadgeCrossChecked = false
+            };
+            dbContext.DailyAttendances.Add(attendance);
+            newRecords.Add(attendance);
+        }
+
+        await dbContext.SaveChangesAsync(cancellationToken);
+
+        var employeeIds = newRecords.Select(r => r.EmployeeId).Distinct().ToList();
+        var employeeNames = await ResolveEmployeeNamesAsync(employeeIds, cancellationToken);
+
+        var result = newRecords.Select(r => new
+        {
+            r.Id,
+            r.EmployeeId,
+            EmployeeName = employeeNames.GetValueOrDefault(r.EmployeeId, "Unknown"),
+            r.Date,
+            r.IsPresent,
+            r.Remark
+        })
+        .OrderBy(r => r.EmployeeId)
+        .ToList();
+
+        return Ok(new { message = "Attendance records reset and regenerated.", count = result.Count, records = result });
     }
 
     private async Task<Dictionary<string, string>> ResolveEmployeeNamesAsync(

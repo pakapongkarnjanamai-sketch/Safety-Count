@@ -17,6 +17,9 @@ function AttendancePage() {
   const [saveStatus, setSaveStatus] = useState('idle') // idle | saving | saved | error
   const [errorMessage, setErrorMessage] = useState('')
 
+  const [isResetting, setIsResetting] = useState(false)
+  const [showResetConfirm, setShowResetConfirm] = useState(false)
+
   const [history, setHistory] = useState([])
   const [isLoadingHistory, setIsLoadingHistory] = useState(true)
 
@@ -132,6 +135,24 @@ function AttendancePage() {
     })
   }
 
+  const onResetAttendance = async () => {
+    try {
+      setIsResetting(true)
+      setShowResetConfirm(false)
+      const res = await fetch(`/api/attendance/${selectedDate}/reset`, {
+        method: 'POST',
+      })
+      if (!res.ok) throw new Error('Reset failed.')
+      const data = await res.json()
+      setRows(data.records)
+      setErrorMessage('')
+    } catch (err) {
+      setErrorMessage(err.message)
+    } finally {
+      setIsResetting(false)
+    }
+  }
+
   const presentCount = rows.filter((r) => r.isPresent).length
   const absentCount = rows.length - presentCount
 
@@ -190,6 +211,17 @@ function AttendancePage() {
               className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700 shadow-sm transition-colors duration-150 focus:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
             />
           </div>
+
+          <button
+            type="button"
+            onClick={() => setShowResetConfirm(true)}
+            disabled={isResetting}
+            className="rounded-lg bg-slate-600 px-3 py-2 text-sm font-medium text-white shadow-sm transition-colors duration-150 disabled:cursor-not-allowed disabled:opacity-60 hover:bg-slate-700 active:scale-95"
+            title="Clear and regenerate all attendance records for this date"
+          >
+            {isResetting ? 'Resetting...' : 'Reset Records'}
+          </button>
+
           <div className="flex items-center gap-2 rounded-lg bg-white px-3 py-2 text-sm shadow-sm ring-1 ring-slate-200/60">
             <span className="inline-block h-2 w-2 rounded-full bg-emerald-500" />
             <span className="text-slate-600">Present:</span>
@@ -301,6 +333,35 @@ function AttendancePage() {
           data={filteredRows}
           emptyMessage="No attendance records. Add employees first."
         />
+      )}
+
+      {/* Reset Confirmation Dialog */}
+      {showResetConfirm && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+          <div className="rounded-lg bg-white p-6 shadow-xl ring-1 ring-slate-200 max-w-sm">
+            <h3 className="text-lg font-semibold text-slate-900">Reset Attendance Records</h3>
+            <p className="mt-2 text-sm text-slate-600">
+              This will delete all attendance records for <span className="font-mono font-medium">{selectedDate}</span> and create fresh ones with all employees marked as present.
+            </p>
+            <div className="mt-6 flex gap-2">
+              <button
+                type="button"
+                onClick={() => setShowResetConfirm(false)}
+                className="flex-1 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 transition-colors duration-150 hover:bg-slate-50 active:scale-95"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={onResetAttendance}
+                disabled={isResetting}
+                className="flex-1 rounded-lg bg-red-600 px-4 py-2 text-sm font-medium text-white transition-colors duration-150 disabled:cursor-not-allowed disabled:opacity-60 hover:bg-red-700 active:scale-95"
+              >
+                {isResetting ? 'Resetting...' : 'Confirm Reset'}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   )

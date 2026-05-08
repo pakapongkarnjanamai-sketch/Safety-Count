@@ -7,6 +7,7 @@ const PAGE_TITLES = {
   '/employees': 'Employees',
   '/attendance': 'Attendance',
   '/history': 'History',
+  '/api-tools': 'API Tools',
 }
 
 function AppLayout() {

@@ -95,6 +95,41 @@ public class AttendanceControllerTests
     }
 
     [Fact]
+    public async Task CrossCheckBadges_ShouldUseDateFromUploadedFileName()
+    {
+        var targetDate = DateTime.Today.AddDays(-2).Date;
+        var options = new DbContextOptionsBuilder<ApplicationDbContext>()
+            .UseInMemoryDatabase(Guid.NewGuid().ToString())
+            .Options;
+
+        await using var dbContext = new ApplicationDbContext(options);
+        dbContext.Employees.Add(new Employee { EId = "480412", Name = "Alice" });
+        await dbContext.SaveChangesAsync();
+
+        var controller = new AttendanceController(
+            dbContext,
+            new BadgeFileReaderService(),
+            new BadgeAttendanceService(dbContext),
+            Microsoft.Extensions.Options.Options.Create(new BadgeFileSettings()));
+
+        var content = $"4804120I {targetDate:yyMMdd} 0546 05\n";
+        using var stream = new MemoryStream(Encoding.UTF8.GetBytes(content));
+        IFormFile file = new FormFile(stream, 0, stream.Length, "file", $"{targetDate:ddMMMyy}".ToUpperInvariant() + ".TAF");
+
+        var actionResult = await controller.CrossCheckBadges(file, CancellationToken.None);
+
+        var okResult = Assert.IsType<OkObjectResult>(actionResult);
+        Assert.NotNull(okResult.Value);
+
+        var targetAttendance = await dbContext.DailyAttendances.SingleAsync(x => x.EmployeeId == "480412" && x.Date == targetDate);
+
+        Assert.True(targetAttendance.IsPresent);
+        Assert.True(targetAttendance.IsBadgeCrossChecked);
+        Assert.Equal(targetDate.AddHours(5).AddMinutes(46), targetAttendance.BadgeSwipeTime);
+        Assert.False(await dbContext.DailyAttendances.AnyAsync(x => x.EmployeeId == "480412" && x.Date == DateTime.Today));
+    }
+
+    [Fact]
     public async Task CrossCheckBadges_ShouldCreateMissingDailyAttendanceForToday()
     {
         var today = DateTime.Today;
@@ -140,6 +175,59 @@ public class AttendanceControllerTests
         Assert.False(absentAttendance.IsPresent);
         Assert.True(absentAttendance.IsBadgeCrossChecked);
         Assert.Null(absentAttendance.BadgeSwipeTime);
+    }
+
+    [Fact]
+    public async Task CrossCheckBadgesFromShare_ShouldUseDateFromProvidedFileName()
+    {
+        var targetDate = DateTime.Today.AddDays(-3).Date;
+        var shareDirectory = Path.Combine(Path.GetTempPath(), $"badge-share-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(shareDirectory);
+
+        var fileName = $"{targetDate:ddMMMyy}".ToUpperInvariant() + ".TAF";
+        var filePath = Path.Combine(shareDirectory, fileName);
+        await File.WriteAllTextAsync(filePath, $"4804120I {targetDate:yyMMdd} 0546 05{Environment.NewLine}");
+
+        try
+        {
+            var options = new DbContextOptionsBuilder<ApplicationDbContext>()
+                .UseInMemoryDatabase(Guid.NewGuid().ToString())
+                .Options;
+
+            await using var dbContext = new ApplicationDbContext(options);
+            dbContext.Employees.Add(new Employee { EId = "480412", Name = "Alice" });
+            await dbContext.SaveChangesAsync();
+
+            var controller = new AttendanceController(
+                dbContext,
+                new BadgeFileReaderService(),
+                new BadgeAttendanceService(dbContext),
+                Microsoft.Extensions.Options.Options.Create(new BadgeFileSettings { ShareDirectory = shareDirectory }));
+
+            var actionResult = await controller.CrossCheckBadgesFromShare(DateTime.Today, fileName, CancellationToken.None);
+
+            var okResult = Assert.IsType<OkObjectResult>(actionResult);
+            Assert.NotNull(okResult.Value);
+
+            var targetAttendance = await dbContext.DailyAttendances.SingleAsync(x => x.EmployeeId == "480412" && x.Date == targetDate);
+
+            Assert.True(targetAttendance.IsPresent);
+            Assert.True(targetAttendance.IsBadgeCrossChecked);
+            Assert.Equal(targetDate.AddHours(5).AddMinutes(46), targetAttendance.BadgeSwipeTime);
+            Assert.False(await dbContext.DailyAttendances.AnyAsync(x => x.EmployeeId == "480412" && x.Date == DateTime.Today));
+        }
+        finally
+        {
+            if (File.Exists(filePath))
+            {
+                File.Delete(filePath);
+            }
+
+            if (Directory.Exists(shareDirectory))
+            {
+                Directory.Delete(shareDirectory);
+            }
+        }
     }
 
     [Fact]

@@ -108,10 +108,8 @@ public class NotificationsController(
             return StatusCode(500, "BadgeFileSettings:ShareDirectory is not configured.");
         }
 
-        var targetDate = (dto.AttendanceDate ?? DateTime.Today).Date;
-        var resolvedFileName = string.IsNullOrWhiteSpace(dto.FileName)
-            ? $"{targetDate:ddMMMyy}".ToUpperInvariant() + ".TAF"
-            : Path.GetFileName(dto.FileName.Trim());
+        var resolvedFileName = BadgeFileNameResolver.ResolveFileName(dto.FileName, dto.AttendanceDate);
+        var targetDate = BadgeFileNameResolver.ResolveAttendanceDate(resolvedFileName, dto.AttendanceDate);
 
         var filePath = Path.Combine(shareDirectory, resolvedFileName);
         if (!System.IO.File.Exists(filePath))
@@ -120,7 +118,7 @@ public class NotificationsController(
         }
 
         var badgeSwipes = await badgeFileReaderService.ParseBadgeSwipePathAsync(filePath, cancellationToken);
-        var updatedCount = await badgeAttendanceService.CrossCheckTodayAsync(badgeSwipes, cancellationToken);
+        var updatedCount = await badgeAttendanceService.CrossCheckAsync(badgeSwipes, targetDate, cancellationToken);
 
         var recipients = dto.Recipients
             .Where(x => !string.IsNullOrWhiteSpace(x))

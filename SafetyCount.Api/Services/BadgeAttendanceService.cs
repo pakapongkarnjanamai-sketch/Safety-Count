@@ -6,9 +6,9 @@ namespace SafetyCount.Api.Services;
 
 public class BadgeAttendanceService(ApplicationDbContext dbContext) : IBadgeAttendanceService
 {
-    public async Task<int> CrossCheckTodayAsync(IEnumerable<BadgeSwipeDto> badgeSwipes, CancellationToken cancellationToken = default)
+    public async Task<int> CrossCheckAsync(IEnumerable<BadgeSwipeDto> badgeSwipes, DateTime targetDate, CancellationToken cancellationToken = default)
     {
-        var today = DateTime.Today;
+        var normalizedTargetDate = targetDate.Date;
 
         var employeeProfiles = await dbContext.Employees
             .AsNoTracking()
@@ -32,14 +32,14 @@ public class BadgeAttendanceService(ApplicationDbContext dbContext) : IBadgeAtte
             .Select(x => x.Key)
             .ToList();
 
-        var todayAttendances = await dbContext.DailyAttendances
-            .Where(x => x.Date == DateTime.Today)
+        var targetAttendances = await dbContext.DailyAttendances
+            .Where(x => x.Date == normalizedTargetDate)
             .ToDictionaryAsync(x => x.EmployeeId, cancellationToken);
 
-        // Ensure attendance rows exist for all employees for today.
+        // Ensure attendance rows exist for all employees for the target date.
         foreach (var employeeId in employeeIds)
         {
-            if (todayAttendances.ContainsKey(employeeId))
+            if (targetAttendances.ContainsKey(employeeId))
             {
                 continue;
             }
@@ -47,7 +47,7 @@ public class BadgeAttendanceService(ApplicationDbContext dbContext) : IBadgeAtte
             var attendance = new Models.DailyAttendance
             {
                 EmployeeId = employeeId,
-                Date = today,
+                Date = normalizedTargetDate,
                 IsPresent = false,
                 Remark = null,
                 BadgeSwipeTime = null,
@@ -55,7 +55,7 @@ public class BadgeAttendanceService(ApplicationDbContext dbContext) : IBadgeAtte
             };
 
             dbContext.DailyAttendances.Add(attendance);
-            todayAttendances[employeeId] = attendance;
+            targetAttendances[employeeId] = attendance;
         }
 
         var firstInByEmployeeId = badgeSwipes
@@ -69,7 +69,7 @@ public class BadgeAttendanceService(ApplicationDbContext dbContext) : IBadgeAtte
 
         foreach (var employeeId in employeeIds)
         {
-            if (!todayAttendances.TryGetValue(employeeId, out var attendance))
+            if (!targetAttendances.TryGetValue(employeeId, out var attendance))
             {
                 continue;
             }

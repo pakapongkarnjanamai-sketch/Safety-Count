@@ -4,5 +4,5 @@ namespace SafetyCount.Api.Services;
 
 public interface IBadgeAttendanceService
 {
-    Task<int> CrossCheckTodayAsync(IEnumerable<BadgeSwipeDto> badgeSwipes, CancellationToken cancellationToken = default);
+    Task<int> CrossCheckAsync(IEnumerable<BadgeSwipeDto> badgeSwipes, DateTime targetDate, CancellationToken cancellationToken = default);
 }

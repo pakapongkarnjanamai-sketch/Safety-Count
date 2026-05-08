@@ -192,9 +192,10 @@ public class AttendanceController(
         }
 
         var badgeSwipes = await badgeFileReaderService.ParseBadgeSwipeFileAsync(file, cancellationToken);
-        var updatedCount = await badgeAttendanceService.CrossCheckTodayAsync(badgeSwipes, cancellationToken);
+        var targetDate = BadgeFileNameResolver.ResolveAttendanceDate(file.FileName);
+        var updatedCount = await badgeAttendanceService.CrossCheckAsync(badgeSwipes, targetDate, cancellationToken);
 
-        return Ok(new { swipeCount = badgeSwipes.Count, updatedCount });
+        return Ok(new { attendanceDate = targetDate, swipeCount = badgeSwipes.Count, updatedCount });
     }
 
     [HttpPost("internal/crosscheck-badges/share")]
@@ -210,10 +211,8 @@ public class AttendanceController(
             return StatusCode(500, "BadgeFileSettings:ShareDirectory is not configured.");
         }
 
-        var targetDate = (attendanceDate ?? DateTime.Today).Date;
-        var resolvedFileName = string.IsNullOrWhiteSpace(fileName)
-            ? $"{targetDate.ToString("ddMMMyy", CultureInfo.InvariantCulture).ToUpperInvariant()}.TAF"
-            : Path.GetFileName(fileName.Trim());
+        var resolvedFileName = BadgeFileNameResolver.ResolveFileName(fileName, attendanceDate);
+        var targetDate = BadgeFileNameResolver.ResolveAttendanceDate(resolvedFileName, attendanceDate);
 
         var filePath = Path.Combine(shareDirectory, resolvedFileName);
         if (!System.IO.File.Exists(filePath))
@@ -222,7 +221,7 @@ public class AttendanceController(
         }
 
         var badgeSwipes = await badgeFileReaderService.ParseBadgeSwipePathAsync(filePath, cancellationToken);
-        var updatedCount = await badgeAttendanceService.CrossCheckTodayAsync(badgeSwipes, cancellationToken);
+        var updatedCount = await badgeAttendanceService.CrossCheckAsync(badgeSwipes, targetDate, cancellationToken);
 
         return Ok(new
         {

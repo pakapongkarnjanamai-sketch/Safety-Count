@@ -156,7 +156,7 @@ function EmployeesPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ requiresBadgeSwipe: nextValue }),
       })
-      if (!res.ok) throw new Error('Unable to update badge requirement.')
+      if (!res.ok) throw new Error('Unable to update attendance policy.')
 
       setEmployees((prev) =>
         prev.map((emp) =>
@@ -165,7 +165,7 @@ function EmployeesPage() {
             : emp,
         ),
       )
-      showStatus(`Updated badge requirement for "${row.name}".`, 'success')
+      showStatus(`Updated attendance policy for "${row.name}".`, 'success')
     } catch (err) {
       showStatus(err.message, 'error')
     }
@@ -209,7 +209,7 @@ function EmployeesPage() {
     },
     {
       key: 'requiresBadgeSwipe',
-      label: 'Badge Requirement',
+      label: 'Attendance Policy',
       width: '210px',
       render: (row) => {
         const required = row.requiresBadgeSwipe
@@ -226,7 +226,7 @@ function EmployeesPage() {
             <span
               className={`h-1.5 w-1.5 rounded-full ${required ? 'bg-amber-600' : 'bg-emerald-600'}`}
             />
-            {required ? 'Must Swipe Badge' : 'No Badge Required'}
+            {required ? 'Regular Staff (Swipe Required)' : 'Manager (No Swipe)'}
           </button>
         )
       },

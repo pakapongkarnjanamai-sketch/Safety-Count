@@ -20,7 +20,10 @@ public class AttendanceController(
 {
     /// <summary>
     /// Get attendance for a specific date. If no records exist for that date,
-    /// auto-generates records for employees that require badge swipe.
+    /// auto-generates records for ALL employees:
+    /// - Managers (No Badge Required): Always marked as Present
+    /// - Regular Employees: Marked as Present (can be toggled by admin)
+    /// Non-working days return an empty list without auto-generating records.
     /// </summary>
     [HttpGet("{date:datetime}")]
     public async Task<IActionResult> GetAttendanceByDate(DateTime date, CancellationToken cancellationToken)
@@ -31,37 +34,17 @@ public class AttendanceController(
             .Where(x => x.Date == targetDate)
             .ToListAsync(cancellationToken);
 
-        // Auto-generate if no records exist for this date
-        if (records.Count == 0)
+        // Auto-generate only for working days that have no records yet
+        if (records.Count == 0 && await IsWorkingDayAsync(targetDate, cancellationToken))
         {
-            var employees = await dbContext.Employees
-                .ToListAsync(cancellationToken);
-
-            foreach (var emp in employees)
-            {
-                if (string.IsNullOrWhiteSpace(emp.EId))
-                {
-                    continue;
-                }
-
-                var attendance = new DailyAttendance
-                {
-                    EmployeeId = emp.EId,
-                    Date = targetDate,
-                    IsPresent = true,
-                    Remark = null,
-                    IsBadgeCrossChecked = false
-                };
-                dbContext.DailyAttendances.Add(attendance);
-                records.Add(attendance);
-            }
-
+            records = await CreateDefaultAttendancesAsync(targetDate, cancellationToken);
             await dbContext.SaveChangesAsync(cancellationToken);
         }
 
         // Load employee names
         var employeeIds = records.Select(r => r.EmployeeId).Distinct().ToList();
         var employeeNames = await ResolveEmployeeNamesAsync(employeeIds, cancellationToken);
+        var badgeFlags = await ResolveBadgeRequirementsAsync(employeeIds, cancellationToken);
 
         var result = records.Select(r => new
         {
@@ -70,7 +53,8 @@ public class AttendanceController(
             EmployeeName = employeeNames.GetValueOrDefault(r.EmployeeId, "Unknown"),
             r.Date,
             r.IsPresent,
-            r.Remark
+            r.Remark,
+            RequiresBadgeSwipe = badgeFlags.GetValueOrDefault(r.EmployeeId, true)
         })
         .OrderBy(r => r.EmployeeId)
         .ToList();
@@ -80,6 +64,7 @@ public class AttendanceController(
 
     /// <summary>
     /// Update attendance for a single employee on a specific date.
+    /// Employees with RequiresBadgeSwipe = false are always Present and cannot be changed.
     /// </summary>
     [HttpPut("{date:datetime}/{employeeId}")]
     public async Task<IActionResult> UpdateAttendance(
@@ -89,6 +74,14 @@ public class AttendanceController(
         CancellationToken cancellationToken)
     {
         var targetDate = date.Date;
+
+        // Managers (RequiresBadgeSwipe = false) are always Present — reject any change
+        // This ensures manager attendance is locked and always shows as Present
+        var employee = await dbContext.Employees
+            .AsNoTracking()
+            .FirstOrDefaultAsync(e => e.EId == employeeId, cancellationToken);
+        if (employee != null && !employee.RequiresBadgeSwipe)
+            return BadRequest(new { error = "Managers are always marked as Present and cannot be modified." });
 
         var attendance = await dbContext.DailyAttendances
             .FirstOrDefaultAsync(x => x.Date == targetDate && x.EmployeeId == employeeId, cancellationToken);
@@ -114,6 +107,60 @@ public class AttendanceController(
 
         await dbContext.SaveChangesAsync(cancellationToken);
         return Ok();
+    }
+
+    /// <summary>
+    /// Get working-day status for each date in the given range.
+    /// Default: Sunday = non-working; Mon–Sat = working. Overrides stored in DB.
+    /// </summary>
+    [HttpGet("working-days")]
+    public async Task<IActionResult> GetWorkingDays(
+        [FromQuery] DateTime from,
+        [FromQuery] DateTime to,
+        CancellationToken cancellationToken)
+    {
+        var fromDate = from.Date;
+        var toDate = to.Date;
+
+        var overrides = await dbContext.WorkingDays
+            .Where(w => w.Date >= fromDate && w.Date <= toDate)
+            .ToDictionaryAsync(w => w.Date, w => w.IsWorkingDay, cancellationToken);
+
+        var result = new List<object>();
+        for (var d = fromDate; d <= toDate; d = d.AddDays(1))
+        {
+            var isWorking = overrides.TryGetValue(d, out var ov) ? ov : d.DayOfWeek != DayOfWeek.Sunday;
+            result.Add(new { date = d.ToString("yyyy-MM-dd"), isWorkingDay = isWorking });
+        }
+
+        return Ok(result);
+    }
+
+    /// <summary>
+    /// Set working-day status for a specific date (creates or updates the override).
+    /// </summary>
+    [HttpPut("working-days/{date:datetime}")]
+    public async Task<IActionResult> SetWorkingDay(
+        DateTime date,
+        [FromBody] SetWorkingDayDto dto,
+        CancellationToken cancellationToken)
+    {
+        var targetDate = date.Date;
+
+        var existing = await dbContext.WorkingDays
+            .FirstOrDefaultAsync(w => w.Date == targetDate, cancellationToken);
+
+        if (existing is null)
+        {
+            dbContext.WorkingDays.Add(new WorkingDay { Date = targetDate, IsWorkingDay = dto.IsWorkingDay });
+        }
+        else
+        {
+            existing.IsWorkingDay = dto.IsWorkingDay;
+        }
+
+        await dbContext.SaveChangesAsync(cancellationToken);
+        return Ok(new { date = targetDate.ToString("yyyy-MM-dd"), isWorkingDay = dto.IsWorkingDay });
     }
 
     /// <summary>
@@ -248,34 +295,13 @@ public class AttendanceController(
             await dbContext.SaveChangesAsync(cancellationToken);
         }
 
-        var employees = await dbContext.Employees
-            .ToListAsync(cancellationToken);
-
-        var newRecords = new List<DailyAttendance>();
-
-        foreach (var emp in employees)
-        {
-            if (string.IsNullOrWhiteSpace(emp.EId))
-            {
-                continue;
-            }
-
-            var attendance = new DailyAttendance
-            {
-                EmployeeId = emp.EId,
-                Date = targetDate,
-                IsPresent = true,
-                Remark = null,
-                IsBadgeCrossChecked = false
-            };
-            dbContext.DailyAttendances.Add(attendance);
-            newRecords.Add(attendance);
-        }
+        var newRecords = await CreateDefaultAttendancesAsync(targetDate, cancellationToken);
 
         await dbContext.SaveChangesAsync(cancellationToken);
 
         var employeeIds = newRecords.Select(r => r.EmployeeId).Distinct().ToList();
         var employeeNames = await ResolveEmployeeNamesAsync(employeeIds, cancellationToken);
+        var badgeFlags = await ResolveBadgeRequirementsAsync(employeeIds, cancellationToken);
 
         var result = newRecords.Select(r => new
         {
@@ -284,12 +310,38 @@ public class AttendanceController(
             EmployeeName = employeeNames.GetValueOrDefault(r.EmployeeId, "Unknown"),
             r.Date,
             r.IsPresent,
-            r.Remark
+            r.Remark,
+            RequiresBadgeSwipe = badgeFlags.GetValueOrDefault(r.EmployeeId, true)
         })
         .OrderBy(r => r.EmployeeId)
         .ToList();
 
         return Ok(new { message = "Attendance records reset and regenerated.", count = result.Count, records = result });
+    }
+
+    private async Task<bool> IsWorkingDayAsync(DateTime date, CancellationToken ct)
+    {
+        var targetDate = date.Date;
+        var ov = await dbContext.WorkingDays
+            .FirstOrDefaultAsync(w => w.Date == targetDate, ct);
+        return ov?.IsWorkingDay ?? targetDate.DayOfWeek != DayOfWeek.Sunday;
+    }
+
+    /// <summary>
+    /// Resolve badge requirements for employees.
+    /// Returns: true = Regular Employee (must tap badge), false = Manager (no badge needed)
+    /// </summary>
+    private async Task<Dictionary<string, bool>> ResolveBadgeRequirementsAsync(
+        List<string> employeeIds,
+        CancellationToken cancellationToken)
+    {
+        var employees = await dbContext.Employees
+            .AsNoTracking()
+            .Where(e => e.EId != null && employeeIds.Contains(e.EId))
+            .Select(e => new { e.EId, e.RequiresBadgeSwipe })
+            .ToListAsync(cancellationToken);
+
+        return employees.ToDictionary(e => e.EId!, e => e.RequiresBadgeSwipe);
     }
 
     private async Task<Dictionary<string, string>> ResolveEmployeeNamesAsync(
@@ -303,5 +355,35 @@ public class AttendanceController(
             .ToListAsync(cancellationToken);
 
         return employees.ToDictionary(e => e.EId!, e => e.Name);
+    }
+
+    /// <summary>
+    /// Create default attendance records for a date.
+    /// ALL employees get IsPresent = true:
+    /// - Managers: IsPresent=true is locked (cannot be changed)
+    /// - Regular Employees: IsPresent=true can be toggled by admin
+    /// </summary>
+    private async Task<List<DailyAttendance>> CreateDefaultAttendancesAsync(
+        DateTime targetDate,
+        CancellationToken cancellationToken)
+    {
+        var employeeIds = await dbContext.Employees
+            .AsNoTracking()
+            .Where(e => e.EId != null && e.EId.Trim() != string.Empty)
+            .Select(e => e.EId!.Trim())
+            .Distinct()
+            .ToListAsync(cancellationToken);
+
+        var attendances = employeeIds.Select(employeeId => new DailyAttendance
+        {
+            EmployeeId = employeeId,
+            Date = targetDate,
+            IsPresent = true,
+            Remark = null,
+            IsBadgeCrossChecked = false
+        }).ToList();
+
+        dbContext.DailyAttendances.AddRange(attendances);
+        return attendances;
     }
 }

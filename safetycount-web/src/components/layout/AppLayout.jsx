@@ -7,6 +7,7 @@ const PAGE_TITLES = {
   '/employees': 'Employees',
   '/attendance': 'Attendance',
   '/history': 'History',
+  '/monthly-pivot': 'Monthly Pivot',
   '/api-tools': 'API Tools',
 }
 

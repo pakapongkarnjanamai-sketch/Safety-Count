@@ -8,7 +8,7 @@ function DataTable({ columns, data, emptyMessage = 'No data available.' }) {
               {columns.map((col) => (
                 <th
                   key={col.key}
-                  className="whitespace-nowrap px-4 py-3 text-xs font-semibold uppercase tracking-wider text-slate-500"
+                  className={`whitespace-nowrap px-4 py-3 text-xs font-semibold uppercase tracking-wider text-slate-500 ${col.headerClassName ?? ''}`}
                   style={col.width ? { width: col.width } : undefined}
                 >
                   {col.label}
@@ -33,7 +33,10 @@ function DataTable({ columns, data, emptyMessage = 'No data available.' }) {
                   className="transition-colors duration-150 hover:bg-slate-50/60"
                 >
                   {columns.map((col) => (
-                    <td key={col.key} className="whitespace-nowrap px-4 py-3 text-slate-700">
+                    <td
+                      key={col.key}
+                      className={`whitespace-nowrap px-4 py-3 text-slate-700 ${typeof col.cellClassName === 'function' ? col.cellClassName(row, rowIndex) : col.cellClassName ?? ''}`}
+                    >
                       {col.render ? col.render(row, rowIndex) : row[col.key]}
                     </td>
                   ))}

@@ -1,9 +1,32 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
-import DataTable from '../components/ui/DataTable'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import StatusBadge from '../components/ui/StatusBadge'
 
 function formatDateParam(d) {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+}
+
+function formatShortDate(dateStr) {
+  const d = new Date(dateStr)
+  if (Number.isNaN(d.getTime())) return dateStr
+  return `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}`
+}
+
+function formatDayName(dateStr) {
+  const d = new Date(dateStr)
+  if (Number.isNaN(d.getTime())) return ''
+  return d.toLocaleDateString('en-US', { weekday: 'short' })
+}
+
+function getWeekDates(dateStr) {
+  const d = new Date(dateStr)
+  if (Number.isNaN(d.getTime())) return []
+  const sunday = new Date(d)
+  sunday.setDate(d.getDate() - d.getDay())
+  return Array.from({ length: 7 }, (_, i) => {
+    const nd = new Date(sunday)
+    nd.setDate(sunday.getDate() + i)
+    return formatDateParam(nd)
+  })
 }
 
 function AttendancePage() {
@@ -11,20 +34,20 @@ function AttendancePage() {
   const [selectedDate, setSelectedDate] = useState(today)
 
   const [rows, setRows] = useState([])
-  const [filteredRows, setFilteredRows] = useState([])
   const [searchQuery, setSearchQuery] = useState('')
   const [isLoading, setIsLoading] = useState(true)
+  const [isPivotLoading, setIsPivotLoading] = useState(true)
   const [saveStatus, setSaveStatus] = useState('idle') // idle | saving | saved | error
   const [errorMessage, setErrorMessage] = useState('')
 
   const [isResetting, setIsResetting] = useState(false)
   const [showResetConfirm, setShowResetConfirm] = useState(false)
 
-  const [history, setHistory] = useState([])
-  const [isLoadingHistory, setIsLoadingHistory] = useState(true)
+  const [pivotDates, setPivotDates] = useState([])
+  const [pivotMap, setPivotMap] = useState({})
+  const [workingDayMap, setWorkingDayMap] = useState({}) // { 'yyyy-MM-dd': boolean }
 
   const savedTimer = useRef(null)
-  const debounceTimers = useRef({})
 
   const loadAttendance = useCallback(async (date) => {
     try {
@@ -43,26 +66,6 @@ function AttendancePage() {
   }, [])
 
   useEffect(() => {
-    const loadHistory = async () => {
-      try {
-        setIsLoadingHistory(true)
-        const to = formatDateParam(new Date())
-        const from = formatDateParam(new Date(Date.now() - 30 * 24 * 60 * 60 * 1000))
-        const res = await fetch(`/api/attendance/history?from=${from}&to=${to}`)
-        if (!res.ok) throw new Error('Unable to load history.')
-        const data = await res.json()
-        setHistory(data)
-      } catch {
-        // Ignore history load errors.
-      } finally {
-        setIsLoadingHistory(false)
-      }
-    }
-
-    loadHistory()
-  }, [])
-
-  useEffect(() => {
     if (selectedDate) {
       loadAttendance(selectedDate)
     }
@@ -70,31 +73,14 @@ function AttendancePage() {
 
   useEffect(() => {
     return () => {
-      Object.values(debounceTimers.current).forEach(clearTimeout)
       clearTimeout(savedTimer.current)
     }
   }, [])
 
-  // Filter
-  useEffect(() => {
-    if (!searchQuery.trim()) {
-      setFilteredRows(rows)
-      return
-    }
-    const q = searchQuery.toLowerCase()
-    setFilteredRows(
-      rows.filter(
-        (r) =>
-          String(r.employeeId).includes(q) ||
-          (r.employeeName ?? '').toLowerCase().includes(q),
-      ),
-    )
-  }, [searchQuery, rows])
-
-  const updateSingle = useCallback(async (employeeId, isPresent, remark) => {
+  const updateAttendanceByDate = useCallback(async (date, employeeId, isPresent, remark) => {
     try {
       setSaveStatus('saving')
-      const res = await fetch(`/api/attendance/${selectedDate}/${employeeId}`, {
+      const res = await fetch(`/api/attendance/${date}/${employeeId}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ employeeId, isPresent, remark }),
@@ -107,32 +93,29 @@ function AttendancePage() {
     } catch {
       setSaveStatus('error')
     }
-  }, [selectedDate])
+  }, [])
 
-  const onTogglePresent = (employeeId) => {
-    setRows((prev) => {
-      const updated = prev.map((r) =>
-        r.employeeId === employeeId ? { ...r, isPresent: !r.isPresent } : r,
-      )
-      const row = updated.find((r) => r.employeeId === employeeId)
-      if (row) updateSingle(employeeId, row.isPresent, row.remark)
-      return updated
-    })
-  }
+  const onTogglePivotStatus = (employeeId, date) => {
+    const dateRows = pivotMap[date] ?? []
+    const row = dateRows.find((r) => r.employeeId === employeeId)
+    if (!row) return
 
-  const onRemarkChange = (employeeId, remark) => {
-    setRows((prev) => {
-      const updated = prev.map((r) =>
-        r.employeeId === employeeId ? { ...r, remark } : r,
-      )
-      // Debounce remark saves
-      clearTimeout(debounceTimers.current[employeeId])
-      debounceTimers.current[employeeId] = setTimeout(() => {
-        const row = updated.find((r) => r.employeeId === employeeId)
-        if (row) updateSingle(employeeId, row.isPresent, row.remark)
-      }, 800)
-      return updated
-    })
+    const nextStatus = !row.isPresent
+
+    setPivotMap((prevMap) => ({
+      ...prevMap,
+      [date]: (prevMap[date] ?? []).map((r) =>
+        r.employeeId === employeeId ? { ...r, isPresent: nextStatus } : r,
+      ),
+    }))
+
+    if (date === selectedDate) {
+      setRows((prev) => prev.map((r) =>
+        r.employeeId === employeeId ? { ...r, isPresent: nextStatus } : r,
+      ))
+    }
+
+    updateAttendanceByDate(date, employeeId, nextStatus, row.remark)
   }
 
   const onResetAttendance = async () => {
@@ -145,6 +128,7 @@ function AttendancePage() {
       if (!res.ok) throw new Error('Reset failed.')
       const data = await res.json()
       setRows(data.records)
+      setPivotMap((prev) => ({ ...prev, [selectedDate]: data.records }))
       setErrorMessage('')
     } catch (err) {
       setErrorMessage(err.message)
@@ -153,48 +137,105 @@ function AttendancePage() {
     }
   }
 
+  const onToggleWorkingDay = async (date) => {
+    const next = !(workingDayMap[date] ?? true)
+    // Optimistic update
+    setWorkingDayMap((prev) => ({ ...prev, [date]: next }))
+    try {
+      const res = await fetch(`/api/attendance/working-days/${date}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ isWorkingDay: next }),
+      })
+      if (!res.ok) throw new Error('Failed to save working day.')
+      // If we just re-enabled a working day that had no records, reload pivot
+      if (next && date <= today && (pivotMap[date] ?? []).length === 0) {
+        const r2 = await fetch(`/api/attendance/${date}`)
+        if (r2.ok) {
+          const data = await r2.json()
+          setPivotMap((prev) => ({ ...prev, [date]: Array.isArray(data) ? data : [] }))
+        }
+      }
+    } catch {
+      // Revert on failure
+      setWorkingDayMap((prev) => ({ ...prev, [date]: !next }))
+    }
+  }
+
   const presentCount = rows.filter((r) => r.isPresent).length
   const absentCount = rows.length - presentCount
 
-  const columns = [
-    {
-      key: 'employeeId',
-      label: 'ID',
-      width: '80px',
-      render: (row) => <span className="font-mono text-sm text-slate-600">{row.employeeId}</span>,
-    },
-    {
-      key: 'employeeName',
-      label: 'Name',
-      render: (row) => <span className="font-medium text-slate-900">{row.employeeName}</span>,
-    },
-    {
-      key: 'isPresent',
-      label: 'Status',
-      width: '140px',
-      render: (row) => (
-        <button
-          type="button"
-          onClick={() => onTogglePresent(row.employeeId)}
-          className="transition-transform duration-150 hover:scale-105 active:scale-95"
-        >
-          <StatusBadge variant={row.isPresent ? 'present' : 'absent'} />
-        </button>
-      ),
-    },
-    {
-      key: 'remark',
-      label: 'Remark',
-      render: (row) => (
-        <input
-          value={row.remark ?? ''}
-          onChange={(e) => onRemarkChange(row.employeeId, e.target.value)}
-          className="w-full rounded-lg border border-slate-200 bg-slate-50/50 px-3 py-1.5 text-sm text-slate-700 transition-colors duration-150 placeholder:text-slate-400 focus:border-indigo-400 focus:bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
-          placeholder="Optional remark"
-        />
-      ),
-    },
-  ]
+  useEffect(() => {
+    const loadPivotData = async () => {
+      const weekDates = getWeekDates(selectedDate)
+      setPivotDates(weekDates)
+      setIsPivotLoading(true)
+
+      const from = weekDates[0]
+      const to = weekDates[weekDates.length - 1]
+
+      // Only fetch attendance for dates up to today
+      const fetchableDates = weekDates.filter((d) => d <= today)
+
+      try {
+        const [attendanceResults, wdRes] = await Promise.all([
+          Promise.all(
+            fetchableDates.map(async (d) => {
+              const res = await fetch(`/api/attendance/${d}`)
+              if (!res.ok) return [d, []]
+              const data = await res.json()
+              return [d, Array.isArray(data) ? data : []]
+            }),
+          ),
+          fetch(`/api/attendance/working-days?from=${from}&to=${to}`),
+        ])
+
+        setPivotMap(Object.fromEntries(attendanceResults))
+
+        if (wdRes.ok) {
+          const wdData = await wdRes.json()
+          const wdMap = Object.fromEntries(wdData.map((w) => [w.date, w.isWorkingDay]))
+          setWorkingDayMap(wdMap)
+        }
+      } catch {
+        setPivotMap({})
+      } finally {
+        setIsPivotLoading(false)
+      }
+    }
+
+    loadPivotData()
+  }, [selectedDate, today])
+
+  const pivotRows = useMemo(() => {
+    const employeeMap = new Map()
+
+    pivotDates.forEach((date) => {
+      ;(pivotMap[date] ?? []).forEach((r) => {
+        if (!employeeMap.has(r.employeeId)) {
+          employeeMap.set(r.employeeId, {
+            employeeId: r.employeeId,
+            employeeName: r.employeeName ?? r.employeeId,
+            requiresBadgeSwipe: r.requiresBadgeSwipe ?? true,
+            byDate: {},
+          })
+        }
+
+        employeeMap.get(r.employeeId).byDate[date] = {
+          isPresent: r.isPresent,
+          remark: r.remark,
+        }
+      })
+    })
+
+    const all = Array.from(employeeMap.values()).sort((a, b) => String(a.employeeId).localeCompare(String(b.employeeId)))
+    const q = searchQuery.trim().toLowerCase()
+    if (!q) return all
+
+    return all.filter((r) =>
+      String(r.employeeId).includes(q) || String(r.employeeName ?? '').toLowerCase().includes(q),
+    )
+  }, [pivotDates, pivotMap, searchQuery])
 
   return (
     <div className="space-y-5">
@@ -264,37 +305,6 @@ function AttendancePage() {
         </div>
       </div>
 
-      {/* Recent history summary */}
-      {!isLoadingHistory && history.length > 0 && (
-        <div>
-          <h3 className="mb-2 text-xs font-semibold uppercase tracking-wider text-slate-500">Recent Days</h3>
-          <div className="flex flex-wrap gap-2">
-            {history.map((day) => {
-              const d = day.date.split('T')[0]
-              const isSelected = d === selectedDate
-              const percent = day.total > 0 ? Math.round((day.presentCount / day.total) * 100) : 0
-              return (
-                <button
-                  key={d}
-                  type="button"
-                  onClick={() => setSelectedDate(d)}
-                  className={`rounded-lg px-3 py-2 text-xs font-medium transition-all duration-150 ${
-                    isSelected
-                      ? 'bg-indigo-600 text-white shadow-sm'
-                      : 'bg-white text-slate-600 shadow-sm ring-1 ring-slate-200/60 hover:bg-slate-50'
-                  }`}
-                >
-                  <div>{d}</div>
-                  <div className={`mt-0.5 ${isSelected ? 'text-indigo-200' : percent === 100 ? 'text-emerald-500' : 'text-slate-400'}`}>
-                    {percent}% present
-                  </div>
-                </button>
-              )
-            })}
-          </div>
-        </div>
-      )}
-
       {/* Search */}
       <div className="relative">
         <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400">
@@ -316,23 +326,114 @@ function AttendancePage() {
         </div>
       )}
 
-      {/* Table */}
-      {isLoading ? (
+      {/* Pivot Table */}
+      {isLoading || isPivotLoading ? (
         <div className="flex items-center justify-center rounded-xl bg-white py-16 shadow-sm ring-1 ring-slate-200/60">
           <div className="flex items-center gap-3 text-sm text-slate-500">
             <svg className="h-5 w-5 animate-spin text-indigo-500" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
               <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
               <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
             </svg>
-            Loading attendance...
+            Loading pivot table...
           </div>
         </div>
       ) : (
-        <DataTable
-          columns={columns}
-          data={filteredRows}
-          emptyMessage="No attendance records. Add employees first."
-        />
+        <div className="overflow-hidden rounded-xl bg-white shadow-sm ring-1 ring-slate-200/60">
+          <div className="overflow-x-auto">
+            <table className="min-w-full text-left text-sm">
+              <thead>
+                <tr className="border-b border-slate-200 bg-slate-50/80">
+                  <th className="sticky left-0 z-10 bg-slate-50/90 px-3 py-3 text-xs font-semibold uppercase tracking-wider text-slate-500">Employee</th>
+                  {pivotDates.map((d) => {
+                    const isFuture = d > today
+                    const isWorking = workingDayMap[d] ?? true
+                    const isHoliday = !isWorking
+                    let thClass = 'text-slate-500'
+                    let dayClass = 'text-slate-400'
+                    if (isFuture)        { thClass = 'bg-slate-50/40 text-slate-300'; dayClass = 'text-slate-300' }
+                    else if (isHoliday) { thClass = 'bg-orange-50/60 text-orange-300'; dayClass = 'text-orange-300' }
+                    else if (d === today) { thClass = 'bg-indigo-50 text-indigo-700'; dayClass = 'text-indigo-500' }
+                    return (
+                      <th key={d} className={`whitespace-nowrap px-3 py-3 text-center text-xs font-semibold uppercase tracking-wider ${thClass}`}>
+                        <div className={`text-[10px] font-bold ${dayClass}`}>{formatDayName(d)}</div>
+                        <div>{formatShortDate(d)}</div>
+                        {d === today && isWorking && <div className="mt-0.5"><span className="rounded bg-indigo-600 px-1 py-0.5 text-[9px] font-bold text-white">Today</span></div>}
+                        {!isFuture && (
+                          <button
+                            type="button"
+                            onClick={() => onToggleWorkingDay(d)}
+                            title={isWorking ? 'Mark as holiday' : 'Mark as working day'}
+                            className={`mt-1 rounded px-1.5 py-0.5 text-[9px] font-semibold transition-colors ${
+                              isWorking
+                                ? 'bg-slate-100 text-slate-500 hover:bg-orange-100 hover:text-orange-600'
+                                : 'bg-orange-100 text-orange-600 hover:bg-slate-100 hover:text-slate-500'
+                            }`}
+                          >
+                            {isWorking ? 'Work' : 'Holiday'}
+                          </button>
+                        )}
+                      </th>
+                    )
+                  })}
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {pivotRows.length === 0 ? (
+                  <tr>
+                    <td colSpan={pivotDates.length + 1} className="px-4 py-12 text-center text-sm text-slate-400">
+                      No attendance records. Add employees first.
+                    </td>
+                  </tr>
+                ) : (
+                  pivotRows.map((row) => (
+                    <tr key={row.employeeId} className="hover:bg-slate-50/60">
+                      <td className="sticky left-0 z-10 whitespace-nowrap bg-white px-3 py-2.5">
+                        <div className="font-mono text-xs text-slate-500">{row.employeeId}</div>
+                        <div className="font-medium text-slate-800">{row.employeeName}</div>
+                        {!row.requiresBadgeSwipe && (
+                          <div className="mt-0.5">
+                            <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[9px] font-semibold text-slate-400">Manager</span>
+                          </div>
+                        )}
+                      </td>
+                      {pivotDates.map((d) => {
+                        const isFuture = d > today
+                        const isWorking = workingDayMap[d] ?? true
+                        const isHoliday = !isWorking
+                        const cell = row.byDate[d]
+                        const isPresent = cell?.isPresent
+                        let tdClass = ''
+                        if (isFuture)        tdClass = 'bg-slate-50/40'
+                        else if (isHoliday) tdClass = 'bg-orange-50/40'
+                        else if (d === today) tdClass = 'bg-indigo-50/60'
+                        return (
+                          <td key={`${row.employeeId}-${d}`} className={`px-3 py-2.5 ${tdClass}`}>
+                            {isFuture || isHoliday ? (
+                              <span className={`select-none text-xs ${isHoliday ? 'text-orange-300' : 'text-slate-300'}`}>—</span>
+                            ) : !row.requiresBadgeSwipe ? (
+                              <StatusBadge variant="present" />
+                            ) : cell ? (
+                              <button
+                                type="button"
+                                onClick={() => onTogglePivotStatus(row.employeeId, d)}
+                                className="transition-transform duration-150 hover:scale-105 active:scale-95"
+                                title={`Toggle ${row.employeeId} on ${d}`}
+                              >
+                                <StatusBadge variant={isPresent ? 'present' : 'absent'} />
+                              </button>
+                            ) : (
+                              <StatusBadge variant="pending" label="N/A" />
+                            )}
+                          </td>
+                        )
+                      })}
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
       )}
 
       {/* Reset Confirmation Dialog */}

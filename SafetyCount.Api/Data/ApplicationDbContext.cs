@@ -9,6 +9,8 @@ public class ApplicationDbContext(DbContextOptions<ApplicationDbContext> options
 
     public DbSet<DailyAttendance> DailyAttendances => Set<DailyAttendance>();
 
+    public DbSet<WorkingDay> WorkingDays => Set<WorkingDay>();
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         base.OnModelCreating(modelBuilder);
@@ -20,5 +22,9 @@ public class ApplicationDbContext(DbContextOptions<ApplicationDbContext> options
         modelBuilder.Entity<Employee>()
             .Property(x => x.RequiresBadgeSwipe)
             .HasDefaultValue(true);
+
+        modelBuilder.Entity<WorkingDay>()
+            .HasIndex(x => x.Date)
+            .IsUnique();
     }
 }

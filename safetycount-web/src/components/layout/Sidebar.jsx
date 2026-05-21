@@ -29,6 +29,15 @@ const NAV_ITEMS = [
     ),
   },
   {
+    to: '/monthly-pivot',
+    label: 'Monthly Pivot',
+    icon: (
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="h-5 w-5">
+        <path d="M2.5 3.75A1.75 1.75 0 0 1 4.25 2h11.5A1.75 1.75 0 0 1 17.5 3.75v12.5A1.75 1.75 0 0 1 15.75 18H4.25A1.75 1.75 0 0 1 2.5 16.25V3.75Zm2 1a.25.25 0 0 0-.25.25V7h3V4.5h-2.75Zm4.25 0V7h3V4.5h-3Zm4.5 0V7h2.25V5a.25.25 0 0 0-.25-.25h-2Zm2.25 3.75H13.25v3h2.25v-3Zm0 4.5H13.25v2.5h2.5a.25.25 0 0 0 .25-.25V13Zm-3.75 2.5V13h-3v2.5h3Zm-4.5 0V13H4.5v2.25c0 .138.112.25.25.25h2.5Zm-2.75-4h3v-3h-3v3Zm4.25 0h3v-3h-3v3Z" />
+      </svg>
+    ),
+  },
+  {
     to: '/api-tools',
     label: 'API Tools',
     icon: (

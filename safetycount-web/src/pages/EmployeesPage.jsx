@@ -226,7 +226,7 @@ function EmployeesPage() {
             <span
               className={`h-1.5 w-1.5 rounded-full ${required ? 'bg-amber-600' : 'bg-emerald-600'}`}
             />
-            {required ? 'Regular Staff (Swipe Required)' : 'Manager (No Swipe)'}
+            {required ? 'Staff' : 'Manager'}
           </button>
         )
       },

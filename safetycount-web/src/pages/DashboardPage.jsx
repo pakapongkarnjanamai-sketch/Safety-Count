@@ -18,6 +18,7 @@ function DashboardPage() {
   const [todayPresents, setTodayPresents] = useState([])
   const [isLoading, setIsLoading] = useState(true)
   const [isHistoryLoading, setIsHistoryLoading] = useState(true)
+  const [workingDayMap, setWorkingDayMap] = useState({})
 
   useEffect(() => {
     let isMounted = true
@@ -77,13 +78,28 @@ function DashboardPage() {
         const from = formatDateParam(new Date(viewMonth.getFullYear(), viewMonth.getMonth(), 1))
         const to = formatDateParam(new Date(viewMonth.getFullYear(), viewMonth.getMonth() + 1, 0))
 
-        const res = await fetch(`/api/attendance/history?from=${from}&to=${to}`)
-        if (res.ok) {
-          const data = await res.json()
+        const [historyRes, workingDayRes] = await Promise.all([
+          fetch(`/api/attendance/history?from=${from}&to=${to}`),
+          fetch(`/api/attendance/working-days?from=${from}&to=${to}`),
+        ])
+
+        if (historyRes.ok) {
+          const data = await historyRes.json()
           if (isMounted) setHistory(Array.isArray(data) ? data : [])
         }
+
+        if (workingDayRes.ok) {
+          const data = await workingDayRes.json()
+          const nextMap = Object.fromEntries(
+            (Array.isArray(data) ? data : []).map((d) => [d.date, Boolean(d.isWorkingDay)]),
+          )
+          if (isMounted) setWorkingDayMap(nextMap)
+        }
       } catch {
-        if (isMounted) setHistory([])
+        if (isMounted) {
+          setHistory([])
+          setWorkingDayMap({})
+        }
       } finally {
         if (isMounted) setIsHistoryLoading(false)
       }
@@ -131,12 +147,15 @@ function DashboardPage() {
       const dateKey = formatDateParam(new Date(year, month, day))
       const row = historyByDate.get(dateKey)
       const rate = row && row.total > 0 ? Math.round((row.presentCount / row.total) * 100) : null
+      const isWorkingDay = workingDayMap[dateKey] ?? (new Date(year, month, day).getDay() !== 0)
 
       cells.push({
         day,
         dateKey,
         row,
         rate,
+        isWorkingDay,
+        isFuture: dateKey > today,
         isToday: dateKey === today,
       })
     }
@@ -150,7 +169,7 @@ function DashboardPage() {
       weeks.push(cells.slice(i, i + 7))
     }
     return weeks
-  }, [historyByDate, today, viewMonth])
+  }, [historyByDate, today, viewMonth, workingDayMap])
 
   return (
     <div className="space-y-4">
@@ -204,62 +223,114 @@ function DashboardPage() {
       <div className="grid items-start gap-4 lg:grid-cols-3 lg:items-start">
         <div className="overflow-hidden rounded-xl bg-white p-4 shadow-sm ring-1 ring-slate-200/60 lg:col-span-2 xl:p-5">
           <div className="mb-3">
-            <h2 className="text-base font-semibold text-slate-900">Attendance Overview</h2>
+            <div className="flex items-baseline justify-between">
+              <h2 className="text-base font-semibold text-slate-900">Attendance Overview</h2>
+              <span className="text-sm font-medium text-slate-500">
+                {viewMonth.toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}
+              </span>
+            </div>
+           
           </div>
 
           {isHistoryLoading ? (
             <div className="flex items-center justify-center py-20 text-sm text-slate-500">Loading calendar data...</div>
           ) : (
             <div className="overflow-x-auto">
-              <div className="min-w-[740px]">
-                <div className="grid grid-cols-7 gap-1.5">
+              <div className="min-w-[700px]">
+                <div className="grid grid-cols-7 gap-1">
                   {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map((d, dayIndex) => (
                     <div
                       key={d}
-                      className={`rounded-md px-2 py-1.5 text-center text-xs font-semibold uppercase tracking-wide ${dayIndex === 0 || dayIndex === 6 ? 'bg-slate-100 text-slate-600' : 'bg-slate-50 text-slate-500'}`}
+                      className={`rounded-md border border-slate-200 px-2 py-1.5 text-center text-xs font-semibold uppercase tracking-wide ${dayIndex === 0 ? 'border-l-0' : ''} ${dayIndex === 6 ? 'border-r-0' : ''} ${dayIndex === 0 || dayIndex === 6 ? 'bg-slate-100 text-slate-600' : 'bg-slate-50 text-slate-500'}`}
                     >
                       {d}
                     </div>
                   ))}
                 </div>
 
-                <div className="mt-1.5 space-y-1.5">
+                <div className="mt-1 space-y-1">
                   {calendarWeeks.map((week, weekIndex) => (
-                    <div key={`week-${weekIndex}`} className="grid grid-cols-7 gap-1.5">
+                    <div key={`week-${weekIndex}`} className="grid grid-cols-7 gap-1">
                       {week.map((cell, cellIndex) => {
+                        const isSundayCol = cellIndex === 0
+                        const isSaturdayCol = cellIndex === 6
+
                         if (!cell) {
-                          return <div key={`empty-${weekIndex}-${cellIndex}`} className="h-20 rounded-md bg-slate-50/50" />
+                          return (
+                            <div
+                              key={`empty-${weekIndex}-${cellIndex}`}
+                              className={`h-24 rounded-md border border-slate-200 bg-slate-50/50 ${isSundayCol ? 'border-l-0' : ''} ${isSaturdayCol ? 'border-r-0' : ''}`}
+                            />
+                          )
                         }
 
                         const hasData = Boolean(cell.row && cell.row.total > 0)
-                        const backgroundClass = !hasData
-                          ? 'bg-slate-100 ring-slate-200'
-                          : cell.rate >= 90
-                            ? 'bg-emerald-50 ring-emerald-200'
-                            : cell.rate >= 70
-                              ? 'bg-amber-50 ring-amber-200'
-                              : 'bg-rose-50 ring-rose-200'
+                        const showMetrics = !cell.isFuture && cell.isWorkingDay && hasData
+                        const showDayType = !cell.isFuture
+                        const showNoData = !cell.isFuture && cell.isWorkingDay && !hasData
+                        const dayTypeClass = cell.isWorkingDay
+                          ? 'text-emerald-700 bg-emerald-50 ring-emerald-200'
+                          : 'text-slate-700 bg-slate-100 ring-slate-300'
+                        const backgroundClass = !cell.isWorkingDay
+                          ? 'bg-slate-100 border-slate-300'
+                          : cell.isFuture
+                            ? 'bg-slate-50 border-slate-200'
+                            : !hasData
+                            ? 'bg-slate-100 border-slate-200'
+                            : cell.rate >= 90
+                              ? 'bg-emerald-50 border-emerald-200'
+                              : cell.rate >= 70
+                                ? 'bg-amber-50 border-amber-200'
+                                : 'bg-rose-50 border-rose-200'
+                        const hoverClass = cell.isFuture
+                          ? 'hover:shadow-none'
+                          : !cell.isWorkingDay
+                            ? 'hover:bg-slate-200/70 hover:border-slate-400'
+                            : hasData
+                              ? 'hover:-translate-y-0.5 hover:border-indigo-300 hover:shadow-md'
+                              : 'hover:bg-slate-50 hover:border-slate-300'
 
                         return (
                           <div
                             key={cell.dateKey}
-                            className={`h-20 rounded-md p-1.5 ring-1 transition-all hover:shadow-sm ${cell.isToday ? 'bg-indigo-50 ring-indigo-300' : backgroundClass}`}
-                            title={hasData ? `${cell.dateKey} | Present ${cell.row.presentCount} / ${cell.row.total} (${cell.rate}%)` : `${cell.dateKey} | No data`}
+                            className={`flex h-24 flex-col rounded-md border p-1.5 transition-all duration-150 ${hoverClass} ${isSundayCol ? 'border-l-0' : ''} ${isSaturdayCol ? 'border-r-0' : ''} ${cell.isToday ? 'bg-indigo-50 border-indigo-300' : backgroundClass}`}
+                            title={
+                              cell.isFuture
+                                ? `${cell.dateKey} | Future`
+                                : !cell.isWorkingDay
+                                ? `${cell.dateKey} | Holiday`
+                                : hasData
+                                  ? `${cell.dateKey} | Working Day | Present ${cell.row.presentCount} / ${cell.row.total} (${cell.rate}%)`
+                                  : `${cell.dateKey} | Working Day | No data`
+                            }
                           >
                             <div className="flex items-center justify-between">
                               <span className={`text-xs font-semibold ${cell.isToday ? 'text-indigo-700' : 'text-slate-700'}`}>{cell.day}</span>
-                              {cell.isToday && <span className="rounded bg-indigo-600 px-1.5 py-0.5 text-[10px] font-semibold text-white">Today</span>}
+                              <div className="flex items-center gap-1">
+                                {cell.isToday && <span className="rounded bg-indigo-600 px-1.5 py-0.5 text-[10px] font-semibold text-white">Today</span>}
+                                {showDayType && (
+                                <span className={`inline-flex rounded px-1.5 py-0.5 text-[9px] font-semibold ring-1 ${dayTypeClass}`}>
+                                  {cell.isWorkingDay ? 'Work' : 'Holiday'}
+                                </span>
+                                )}
+                              </div>
                             </div>
 
-                            {hasData ? (
-                              <div className="mt-1 space-y-0.5">
-                                <p className="text-[11px] font-semibold text-slate-700">{cell.rate}%</p>
-                                <p className="text-[10px] text-slate-500">P: {cell.row.presentCount} / T: {cell.row.total}</p>
-                                <p className="text-[10px] text-slate-500">A: {cell.row.absentCount}</p>
+                            {showMetrics ? (
+                              <div className="mt-auto flex items-end justify-between">
+                                <p className="text-[10px] font-semibold text-slate-700">
+                                  {cell.rate}%
+                                </p>
+                                <div className="inline-flex items-center gap-1 text-slate-700">
+                                  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="h-3.5 w-3.5">
+                                    <path d="M10 2a4 4 0 1 0 0 8 4 4 0 0 0 0-8Zm-6 14a6 6 0 0 1 12 0v.5a.5.5 0 0 1-.5.5h-11a.5.5 0 0 1-.5-.5V16Z" />
+                                  </svg>
+                                  <span className="text-[10px] font-semibold">{cell.row.presentCount}</span>
+                                </div>
                               </div>
-                            ) : (
-                              <p className="mt-2 text-[10px] text-slate-400">No data</p>
-                            )}
+                            ) : showNoData ? (
+                              <p className="mt-auto text-[10px] text-slate-400">No data</p>
+                            ) : null}
                           </div>
                         )
                       })}
@@ -271,7 +342,7 @@ function DashboardPage() {
           )}
         </div>
 
-        <div className="self-start overflow-hidden rounded-xl bg-white p-4 shadow-sm ring-1 ring-slate-200/60 xl:p-5">
+        <div className="flex h-full flex-col overflow-hidden rounded-xl bg-white p-4 shadow-sm ring-1 ring-slate-200/60 xl:p-5">
           <div className="flex items-center justify-between">
             <h3 className="text-sm font-semibold text-slate-900">Today Summary</h3>
             <p className="text-xs text-slate-500">{today}</p>
@@ -288,7 +359,7 @@ function DashboardPage() {
             </div>
           </div>
 
-          <div className="mt-3 border-t border-slate-100 pt-3">
+          <div className="mt-3 flex min-h-0 flex-1 flex-col border-t border-slate-100 pt-3">
             <div>
               <div className="mb-2 flex items-center justify-between">
                 <h4 className="text-xs font-semibold uppercase tracking-wide text-red-700">Absent Today</h4>
@@ -304,11 +375,13 @@ function DashboardPage() {
               ) : todayAbsentees.length === 0 ? (
                 <p className="py-3 text-sm text-emerald-700">Everyone is present.</p>
               ) : (
-                <ul className="max-h-52 space-y-1.5 overflow-y-auto">
+                <ul className="max-h-32 space-y-1.5 overflow-y-auto">
                   {todayAbsentees.map((emp) => (
                     <li key={emp.id} className="flex items-center gap-2.5 rounded-lg bg-slate-50 px-3 py-1.5 transition-colors hover:bg-red-50/60">
                       <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-red-100 text-xs font-bold text-red-600">
-                        {(emp.name || emp.id).charAt(0).toUpperCase()}
+                        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="h-4 w-4">
+                          <path d="M10 2a4 4 0 1 0 0 8 4 4 0 0 0 0-8Zm-6 14a6 6 0 1 1 12 0v.5a.5.5 0 0 1-.5.5h-11a.5.5 0 0 1-.5-.5V16Z" />
+                        </svg>
                       </div>
                       <div className="min-w-0 flex-1">
                         <p className="truncate text-sm font-medium text-slate-800">{emp.name || emp.id}</p>
@@ -321,7 +394,7 @@ function DashboardPage() {
               )}
             </div>
 
-            <div className="mt-3 border-t border-slate-100 pt-3">
+            <div className="mt-3 flex min-h-0 flex-1 flex-col border-t border-slate-100 pt-3">
               <div className="mb-2 flex items-center justify-between">
                 <h4 className="text-xs font-semibold uppercase tracking-wide text-emerald-700">Present Today</h4>
                 {todayPresents.length > 0 && (
@@ -336,11 +409,13 @@ function DashboardPage() {
               ) : todayPresents.length === 0 ? (
                 <p className="py-3 text-sm text-slate-600">No present records found.</p>
               ) : (
-                <ul className="max-h-52 space-y-1.5 overflow-y-auto">
+                <ul className="min-h-0 flex-1 space-y-1.5 overflow-y-auto pr-1">
                   {todayPresents.map((emp) => (
                     <li key={emp.id} className="flex items-center gap-2.5 rounded-lg bg-slate-50 px-3 py-1.5 transition-colors hover:bg-emerald-50/60">
                       <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-emerald-100 text-xs font-bold text-emerald-600">
-                        {(emp.name || emp.id).charAt(0).toUpperCase()}
+                        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="h-4 w-4">
+                          <path d="M10 2a4 4 0 1 0 0 8 4 4 0 0 0 0-8Zm-6 14a6 6 0 1 1 12 0v.5a.5.5 0 0 1-.5.5h-11a.5.5 0 0 1-.5-.5V16Z" />
+                        </svg>
                       </div>
                       <div className="min-w-0 flex-1">
                         <p className="truncate text-sm font-medium text-slate-800">{emp.name || emp.id}</p>

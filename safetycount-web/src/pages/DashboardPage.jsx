@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import StatCard from '../components/ui/StatCard'
+import { apiFetch } from '../lib/apiClient'
 
 function formatDateParam(d) {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
@@ -29,7 +30,7 @@ function DashboardPage() {
 
         let totalEmployees = 0
         try {
-          const empRes = await fetch('/api/employees')
+          const empRes = await apiFetch('/api/employees')
           if (empRes.ok) {
             const empData = await empRes.json()
             totalEmployees = Array.isArray(empData) ? empData.length : 0
@@ -44,7 +45,7 @@ function DashboardPage() {
         const presentList = []
 
         try {
-          const attRes = await fetch(`/api/attendance/${today}`)
+          const attRes = await apiFetch(`/api/attendance/${today}`)
           if (attRes.ok) {
             const attData = await attRes.json()
             if (Array.isArray(attData) && attData.length > 0) {
@@ -79,8 +80,8 @@ function DashboardPage() {
         const to = formatDateParam(new Date(viewMonth.getFullYear(), viewMonth.getMonth() + 1, 0))
 
         const [historyRes, workingDayRes] = await Promise.all([
-          fetch(`/api/attendance/history?from=${from}&to=${to}`),
-          fetch(`/api/attendance/working-days?from=${from}&to=${to}`),
+          apiFetch(`/api/attendance/history?from=${from}&to=${to}`),
+          apiFetch(`/api/attendance/working-days?from=${from}&to=${to}`),
         ])
 
         if (historyRes.ok) {

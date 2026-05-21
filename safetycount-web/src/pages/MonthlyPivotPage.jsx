@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import DataTable from '../components/ui/DataTable'
+import { apiFetch } from '../lib/apiClient'
 
 const MONTH_LABELS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
 
@@ -35,7 +36,7 @@ function MonthlyPivotPage() {
         const from = toDateParam(new Date(selectedYear, 0, 1))
         const to = toDateParam(new Date(selectedYear, 11, 31))
 
-        const res = await fetch(`/api/attendance/history?from=${from}&to=${to}`)
+        const res = await apiFetch(`/api/attendance/history?from=${from}&to=${to}`)
         if (!res.ok) throw new Error('Unable to load monthly pivot data.')
 
         const data = await res.json()

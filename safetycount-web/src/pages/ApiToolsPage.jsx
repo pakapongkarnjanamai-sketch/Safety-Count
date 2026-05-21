@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react'
+import { apiFetch } from '../lib/apiClient'
 
 function ApiToolsPage() {
   const [status, setStatus] = useState({ type: '', message: '' })
@@ -65,7 +66,7 @@ function ApiToolsPage() {
         ? `/api/attendance/internal/crosscheck-badges/share?${query}`
         : '/api/attendance/internal/crosscheck-badges/share'
 
-      const res = await fetch(endpoint, { method: 'POST' })
+      const res = await apiFetch(endpoint, { method: 'POST' })
       const payload = await res.json().catch(() => ({}))
       if (!res.ok) {
         throw new Error(payload?.message ?? 'Unable to run share cross-check.')
@@ -93,7 +94,7 @@ function ApiToolsPage() {
       const formData = new FormData()
       formData.append('file', badgeFile)
 
-      const res = await fetch('/api/attendance/internal/crosscheck-badges', {
+      const res = await apiFetch('/api/attendance/internal/crosscheck-badges', {
         method: 'POST',
         body: formData,
       })
@@ -131,7 +132,7 @@ function ApiToolsPage() {
         isBodyHtml: includeAttendanceTable,
       }
 
-      const res = await fetch('/api/notifications/email', {
+      const res = await apiFetch('/api/notifications/email', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
@@ -171,7 +172,7 @@ function ApiToolsPage() {
         isBodyHtml: combinedIncludeAttendanceTable,
       }
 
-      const combinedRes = await fetch('/api/notifications/crosscheck-share-and-email', {
+      const combinedRes = await apiFetch('/api/notifications/crosscheck-share-and-email', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(combinedPayload),

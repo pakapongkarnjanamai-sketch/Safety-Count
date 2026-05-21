@@ -14,7 +14,7 @@ namespace SafetyCount.Api.Tests;
 public class AttendanceControllerTests
 {
     [Fact]
-    public async Task GetAttendanceByDate_ShouldAutoGenerateOnlyBadgeRequiredEmployees()
+    public async Task GetAttendanceByDate_ShouldAutoGenerateForAllEmployees()
     {
         var targetDate = DateTime.Today;
         var options = new DbContextOptionsBuilder<ApplicationDbContext>()
@@ -44,9 +44,10 @@ public class AttendanceControllerTests
             .OrderBy(x => x.EmployeeId)
             .ToListAsync();
 
-        Assert.Equal(2, allAttendances.Count);
+        Assert.Equal(3, allAttendances.Count);
         Assert.Equal("480412", allAttendances[0].EmployeeId);
-        Assert.Equal("480500", allAttendances[1].EmployeeId);
+        Assert.Equal("480499", allAttendances[1].EmployeeId);
+        Assert.Equal("480500", allAttendances[2].EmployeeId);
     }
 
     [Fact]

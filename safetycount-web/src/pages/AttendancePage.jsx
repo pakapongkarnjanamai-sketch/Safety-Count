@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import StatusBadge from '../components/ui/StatusBadge'
+import { apiFetch } from '../lib/apiClient'
 
 function formatDateParam(d) {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
@@ -53,7 +54,7 @@ function AttendancePage() {
     try {
       setIsLoading(true)
       setErrorMessage('')
-      const res = await fetch(`/api/attendance/${date}`)
+      const res = await apiFetch(`/api/attendance/${date}`)
       if (!res.ok) throw new Error('Unable to load attendance.')
       const data = await res.json()
       setRows(data)
@@ -80,7 +81,7 @@ function AttendancePage() {
   const updateAttendanceByDate = useCallback(async (date, employeeId, isPresent, remark) => {
     try {
       setSaveStatus('saving')
-      const res = await fetch(`/api/attendance/${date}/${employeeId}`, {
+      const res = await apiFetch(`/api/attendance/${date}/${employeeId}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ employeeId, isPresent, remark }),
@@ -122,7 +123,7 @@ function AttendancePage() {
     try {
       setIsResetting(true)
       setShowResetConfirm(false)
-      const res = await fetch(`/api/attendance/${selectedDate}/reset`, {
+      const res = await apiFetch(`/api/attendance/${selectedDate}/reset`, {
         method: 'POST',
       })
       if (!res.ok) throw new Error('Reset failed.')
@@ -142,7 +143,7 @@ function AttendancePage() {
     // Optimistic update
     setWorkingDayMap((prev) => ({ ...prev, [date]: next }))
     try {
-      const res = await fetch(`/api/attendance/working-days/${date}`, {
+      const res = await apiFetch(`/api/attendance/working-days/${date}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ isWorkingDay: next }),
@@ -150,7 +151,7 @@ function AttendancePage() {
       if (!res.ok) throw new Error('Failed to save working day.')
       // If we just re-enabled a working day that had no records, reload pivot
       if (next && date <= today && (pivotMap[date] ?? []).length === 0) {
-        const r2 = await fetch(`/api/attendance/${date}`)
+        const r2 = await apiFetch(`/api/attendance/${date}`)
         if (r2.ok) {
           const data = await r2.json()
           setPivotMap((prev) => ({ ...prev, [date]: Array.isArray(data) ? data : [] }))
@@ -181,13 +182,13 @@ function AttendancePage() {
         const [attendanceResults, wdRes] = await Promise.all([
           Promise.all(
             fetchableDates.map(async (d) => {
-              const res = await fetch(`/api/attendance/${d}`)
+              const res = await apiFetch(`/api/attendance/${d}`)
               if (!res.ok) return [d, []]
               const data = await res.json()
               return [d, Array.isArray(data) ? data : []]
             }),
           ),
-          fetch(`/api/attendance/working-days?from=${from}&to=${to}`),
+          apiFetch(`/api/attendance/working-days?from=${from}&to=${to}`),
         ])
 
         setPivotMap(Object.fromEntries(attendanceResults))

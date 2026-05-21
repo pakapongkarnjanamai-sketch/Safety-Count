@@ -352,8 +352,8 @@ public class AttendanceController(
     /// <summary>
     /// Create default attendance records for a date.
     /// ALL employees get IsPresent = true:
-    /// - Managers: IsPresent=true is locked (cannot be changed)
-    /// - Regular Employees: IsPresent=true can be toggled by admin
+    /// - Managers: IsPresent=true by default and can be adjusted by admin
+    /// - Regular Employees: IsPresent=true by default and can be adjusted by admin
     /// </summary>
     private async Task<List<DailyAttendance>> CreateDefaultAttendancesAsync(
         DateTime targetDate,

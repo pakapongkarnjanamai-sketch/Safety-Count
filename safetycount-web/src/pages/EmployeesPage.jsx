@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { createPortal } from 'react-dom'
 import DataTable from '../components/ui/DataTable'
+import { apiFetch } from '../lib/apiClient'
 
 const DEFAULT_EXTERNAL_PAGE_SIZE = 50
 
@@ -44,7 +45,7 @@ function EmployeesPage() {
   const loadEmployees = useCallback(async () => {
     try {
       setIsLoading(true)
-      const res = await fetch('/api/employees')
+      const res = await apiFetch('/api/employees')
       if (!res.ok) throw new Error('Unable to load employees.')
       const json = await res.json()
       const data = Array.isArray(json) ? json : (Array.isArray(json?.data) ? json.data : [])
@@ -102,7 +103,7 @@ function EmployeesPage() {
         params.set('department', department.trim())
       }
 
-      const res = await fetch(`/api/employees/external?${params.toString()}`)
+      const res = await apiFetch(`/api/employees/external?${params.toString()}`)
       if (!res.ok) throw new Error('Unable to load external employees.')
       const payload = await res.json()
       const data = Array.isArray(payload) ? payload : (Array.isArray(payload?.data) ? payload.data : [])
@@ -124,7 +125,7 @@ function EmployeesPage() {
     const key = eId || name
     try {
       setAddingIds((prev) => new Set(prev).add(key))
-      const res = await fetch('/api/employees', {
+      const res = await apiFetch('/api/employees', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ eId, name, requiresBadgeSwipe: true }),
@@ -151,7 +152,7 @@ function EmployeesPage() {
   const onToggleBadgeRequirement = async (row) => {
     const nextValue = !row.requiresBadgeSwipe
     try {
-      const res = await fetch(`/api/employees/${row.sourceId ?? row.id}/badge-requirement`, {
+      const res = await apiFetch(`/api/employees/${row.sourceId ?? row.id}/badge-requirement`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ requiresBadgeSwipe: nextValue }),
@@ -174,7 +175,7 @@ function EmployeesPage() {
   const onDeleteEmployee = async (id, name, eId) => {
     if (!window.confirm(`Delete "${name}" (ID: ${id})? This cannot be undone.`)) return
     try {
-      const res = await fetch(`/api/employees/${id}`, { method: 'DELETE' })
+      const res = await apiFetch(`/api/employees/${id}`, { method: 'DELETE' })
       if (!res.ok) throw new Error('Unable to delete employee.')
       showStatus(`"${name}" deleted.`, 'success')
       await loadEmployees()

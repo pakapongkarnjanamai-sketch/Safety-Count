@@ -1,6 +1,7 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Outlet, useLocation } from 'react-router-dom'
 import Sidebar from './Sidebar'
+import { apiFetch } from '../../lib/apiClient'
 
 const PAGE_TITLES = {
   '/': 'Dashboard',
@@ -13,6 +14,7 @@ const PAGE_TITLES = {
 
 function AppLayout() {
   const [sidebarOpen, setSidebarOpen] = useState(false)
+  const [currentUser, setCurrentUser] = useState(null)
   const location = useLocation()
 
   const pageTitle = PAGE_TITLES[location.pathname] ?? 'SafetyCount'
@@ -23,6 +25,27 @@ function AppLayout() {
     month: 'long',
     day: 'numeric',
   })
+
+  useEffect(() => {
+    let isMounted = true
+
+    const loadCurrentUser = async () => {
+      try {
+        const res = await apiFetch('/api/session/me')
+        if (!res.ok) return
+        const data = await res.json()
+        if (isMounted) setCurrentUser(data)
+      } catch {
+        if (isMounted) setCurrentUser(null)
+      }
+    }
+
+    loadCurrentUser()
+
+    return () => {
+      isMounted = false
+    }
+  }, [])
 
   return (
     <div className="flex h-screen overflow-hidden bg-slate-50">
@@ -49,11 +72,21 @@ function AppLayout() {
             </div>
           </div>
 
-          <div className="flex items-center gap-2 text-sm text-slate-500">
-            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="h-4 w-4 text-slate-400">
-              <path fillRule="evenodd" d="M5.75 2a.75.75 0 0 1 .75.75V4h7V2.75a.75.75 0 0 1 1.5 0V4h.25A2.75 2.75 0 0 1 18 6.75v8.5A2.75 2.75 0 0 1 15.25 18H4.75A2.75 2.75 0 0 1 2 15.25v-8.5A2.75 2.75 0 0 1 4.75 4H5V2.75A.75.75 0 0 1 5.75 2Zm-1 5.5c-.69 0-1.25.56-1.25 1.25v6.5c0 .69.56 1.25 1.25 1.25h10.5c.69 0 1.25-.56 1.25-1.25v-6.5c0-.69-.56-1.25-1.25-1.25H4.75Z" clipRule="evenodd" />
-            </svg>
-            <span className="hidden sm:inline">{today}</span>
+          <div className="flex items-center gap-3 text-sm text-slate-500">
+            {currentUser?.displayName && (
+              <div className="hidden items-center gap-2 rounded-lg bg-slate-50 px-2.5 py-1.5 font-medium text-slate-700 ring-1 ring-slate-200 sm:flex">
+                <span className="flex h-6 w-6 items-center justify-center rounded-full bg-indigo-100 text-xs font-bold text-indigo-700">
+                  {currentUser.displayName.charAt(0).toUpperCase()}
+                </span>
+                <span>{currentUser.displayName}</span>
+              </div>
+            )}
+            <div className="flex items-center gap-2">
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="h-4 w-4 text-slate-400">
+                <path fillRule="evenodd" d="M5.75 2a.75.75 0 0 1 .75.75V4h7V2.75a.75.75 0 0 1 1.5 0V4h.25A2.75 2.75 0 0 1 18 6.75v8.5A2.75 2.75 0 0 1 15.25 18H4.75A2.75 2.75 0 0 1 2 15.25v-8.5A2.75 2.75 0 0 1 4.75 4H5V2.75A.75.75 0 0 1 5.75 2Zm-1 5.5c-.69 0-1.25.56-1.25 1.25v6.5c0 .69.56 1.25 1.25 1.25h10.5c.69 0 1.25-.56 1.25-1.25v-6.5c0-.69-.56-1.25-1.25-1.25H4.75Z" clipRule="evenodd" />
+              </svg>
+              <span className="hidden md:inline">{today}</span>
+            </div>
           </div>
         </header>
 

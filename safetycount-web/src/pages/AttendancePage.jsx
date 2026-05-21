@@ -410,8 +410,6 @@ function AttendancePage() {
                           <td key={`${row.employeeId}-${d}`} className={`px-3 py-2.5 ${tdClass}`}>
                             {isFuture || isHoliday ? (
                               <span className={`select-none text-xs ${isHoliday ? 'text-orange-300' : 'text-slate-300'}`}>—</span>
-                            ) : !row.requiresBadgeSwipe ? (
-                              <StatusBadge variant="present" />
                             ) : cell ? (
                               <button
                                 type="button"
@@ -421,6 +419,8 @@ function AttendancePage() {
                               >
                                 <StatusBadge variant={isPresent ? 'present' : 'absent'} />
                               </button>
+                            ) : !row.requiresBadgeSwipe ? (
+                              <StatusBadge variant="present" />
                             ) : (
                               <StatusBadge variant="pending" label="N/A" />
                             )}

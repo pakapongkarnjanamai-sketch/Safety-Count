@@ -64,7 +64,7 @@ public class AttendanceController(
 
     /// <summary>
     /// Update attendance for a single employee on a specific date.
-    /// Employees with RequiresBadgeSwipe = false are always Present and cannot be changed.
+    /// Both regular employees and managers can have their attendance status updated.
     /// </summary>
     [HttpPut("{date:datetime}/{employeeId}")]
     public async Task<IActionResult> UpdateAttendance(
@@ -74,14 +74,6 @@ public class AttendanceController(
         CancellationToken cancellationToken)
     {
         var targetDate = date.Date;
-
-        // Managers (RequiresBadgeSwipe = false) are always Present — reject any change
-        // This ensures manager attendance is locked and always shows as Present
-        var employee = await dbContext.Employees
-            .AsNoTracking()
-            .FirstOrDefaultAsync(e => e.EId == employeeId, cancellationToken);
-        if (employee != null && !employee.RequiresBadgeSwipe)
-            return BadRequest(new { error = "Managers are always marked as Present and cannot be modified." });
 
         var attendance = await dbContext.DailyAttendances
             .FirstOrDefaultAsync(x => x.Date == targetDate && x.EmployeeId == employeeId, cancellationToken);
